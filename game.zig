@@ -38,7 +38,6 @@ const GameState = struct {
     rng: std.rand.DefaultPrng,
 
     movers: MoverList,
-    // transforms: TransformList,
     input: InputState,
 };
 
@@ -46,6 +45,22 @@ const MoverType = enum {
     PlayerShip,
     Asteroid,
 };
+
+const WindowSize = struct {
+    width: f32,
+    height: f32,
+};
+
+fn get_window_size(window: *sdl.SDL_Window) WindowSize {
+    var width: c_int = 0;
+    var height: c_int = 0;
+    sdl.SDL_GetWindowSize(window, &width, &height);
+
+    return WindowSize{
+        .width = @intToFloat(f32, width),
+        .height = @intToFloat(f32, height),
+    };
+}
 
 pub fn main() u8 {
     if (sdl.SDL_Init(sdl.SDL_INIT_VIDEO | sdl.SDL_INIT_AUDIO) != 0) {
@@ -80,14 +95,9 @@ pub fn main() u8 {
         // .transforms = TransformList.init(std.heap.c_allocator),
     };
 
-    gamestate.movers.resize(4) catch |err| std.debug.warn("failed to alloc ships: {}", err);
+    gamestate.movers.resize(2) catch |err| std.debug.warn("failed to alloc ships: {}", err);
     {
-        var width: c_int = 0;
-        var height: c_int = 0;
-        sdl.SDL_GetWindowSize(gamestate.window, &width, &height);
-
-        const MAX_WIDTH = @intToFloat(f32, width);
-        const MAX_HEIGHT = @intToFloat(f32, height);
+        const WINDOWSIZE = get_window_size(gamestate.window);
 
         var rng = &gamestate.rng.random;
 
@@ -96,9 +106,9 @@ pub fn main() u8 {
                 mover.pos = Vector3{ .x = 200, .y = 200, .z = 0 };
                 mover.scale = 20;
             } else {
-                const x = rng.float(f32) * MAX_WIDTH;
-                const y = rng.float(f32) * MAX_HEIGHT;
-                const scale = 4 + rng.float(f32) * 20.0;
+                const x = rng.float(f32) * WINDOWSIZE.width;
+                const y = rng.float(f32) * WINDOWSIZE.height;
+                const scale = 40 + rng.float(f32) * 40.0;
                 const speed = 0.005 + rng.float(f32) * 0.035;
                 const xdir = rng.float(f32) * 2.0 - 1.0;
                 const ydir = rng.float(f32) * 2.0 - 1.0;
@@ -197,23 +207,43 @@ fn game_tick(state: *GameState, time: Time) void {
         }
     }
 
-    var width: c_int = 0;
-    var height: c_int = 0;
-    sdl.SDL_GetWindowSize(state.window, &width, &height);
+    var collidingState = std.ArrayList(bool).init(std.heap.c_allocator);
+    collidingState.resize(state.movers.count()) catch |err| std.debug.warn("failed to resize collidingState");
+    for (state.movers.toSlice()) |mover1, i| {
+        for (state.movers.toSlice()) |mover2, j| {
+            if (i == j) {
+                continue;
+            }
+            var lengthSq1 = mover1.scale * mover1.scale;
+            var lengthSq2 = mover2.scale * mover2.scale;
+            var distanceSq = mover1.pos.sub(mover2.pos).lengthSq();
+            var isColliding = distanceSq <= lengthSq1 + lengthSq2;
 
-    const MAX_WIDTH = @intToFloat(f32, width);
-    const MAX_HEIGHT = @intToFloat(f32, height);
+            // if (i == 0 and j == 1) {
+            // std.debug.warn("{} {} {} {}\n", lengthSq1, lengthSq2, distanceSq, isColliding);
+            // }
 
+            collidingState.set(i, collidingState.at(i) or isColliding);
+            collidingState.set(j, collidingState.at(j) or isColliding);
+
+            // std.debug.warn("({}, {}) {} {}\n", i, j, collidingState.at(i), collidingState.at(j));
+        }
+    }
+
+    // std.debug.warn("{} {}\n", collidingState.at(0), collidingState.at(1));
+
+    const WINDOWSIZE = get_window_size(state.window);
     for (state.movers.toSlice()) |*mover, index| {
         mover.pos = mover.pos.add(mover.velocity);
-        mover.pos.x = @mod(mover.pos.x + MAX_WIDTH, MAX_WIDTH);
-        mover.pos.y = @mod(mover.pos.y + MAX_HEIGHT, MAX_HEIGHT);
+        mover.pos.x = @mod(mover.pos.x + WINDOWSIZE.width, WINDOWSIZE.width);
+        mover.pos.y = @mod(mover.pos.y + WINDOWSIZE.height, WINDOWSIZE.height);
 
         const objectType = switch (index) {
             0 => MoverType.PlayerShip,
             else => MoverType.Asteroid,
         };
-        draw_object(state.renderer, mover, objectType);
+        draw_object(state.renderer, mover, objectType, collidingState.at(index));
+        // draw_object(state.renderer, mover, objectType, false);
     }
 
     sdl.SDL_RenderPresent(state.renderer);
@@ -246,15 +276,55 @@ const ASTEROID_POINTS = [_]math.Vector3{
     math.Vector3{ .x = 0.0, .y = 0.8, .z = 0.0 },
 };
 
-fn draw_object(renderer: *sdl.SDL_Renderer, mover: *const Mover, objectType: MoverType) void {
+const CIRCLE_POINTS = generate_circle();
+
+fn generate_circle() [32]math.Vector3 {
+    var points: [32]math.Vector3 = undefined;
+    for (points) |*point, i| {
+        var rads = std.math.pi * 2.0 * (@intToFloat(f32, i) / @intToFloat(f32, points.len - 1));
+        const x: f32 = std.math.cos(rads);
+        const y: f32 = std.math.sin(rads);
+        point.* = math.Vector3{ .x = x, .y = y, .z = 0 };
+    }
+    return points;
+}
+
+fn draw_bounding_circle(renderer: *sdl.SDL_Renderer, mover: *const Mover, isColliding: bool) void {
+    const points = CIRCLE_POINTS;
+    var sdlPoints = std.ArrayList(sdl.SDL_Point).init(std.heap.c_allocator);
+    sdlPoints.resize(points.len) catch |err| std.debug.warn("Failed to resize sdlPoints: {}", err);
+
+    for (points) |point, i| {
+        var p = point.scale(mover.scale);
+        p = p.rotateZ(mover.rot);
+        p = p.add(mover.pos);
+
+        sdlPoints.set(i, vector3_to_sdl(p));
+    }
+
+    const cPoints: [*c]sdl.SDL_Point = &sdlPoints.items[0];
+
+    var r: u8 = 128;
+    var g: u8 = 128;
+    var b: u8 = 128;
+    if (isColliding) {
+        g = 0;
+        b = 0;
+    }
+
+    if (sdl.SDL_SetRenderDrawColor(renderer, r, g, b, 255) < 0) {
+        log_sdl_error();
+    }
+    if (sdl.SDL_RenderDrawLines(renderer, cPoints, @intCast(c_int, points.len)) < 0) {
+        log_sdl_error();
+    }
+}
+
+fn draw_object(renderer: *sdl.SDL_Renderer, mover: *const Mover, objectType: MoverType, isColliding: bool) void {
     const points = switch (objectType) {
         MoverType.PlayerShip => SHIP_POINTS,
         MoverType.Asteroid => ASTEROID_POINTS,
     };
-
-    // comptime {
-    //     std.debug.warn("points type: {}", @typeOf(points));
-    // }
 
     var sdlPoints = std.ArrayList(sdl.SDL_Point).init(std.heap.c_allocator);
     sdlPoints.resize(points.len) catch |err| std.debug.warn("Failed to resize sdlPoints: {}", err);
@@ -277,4 +347,6 @@ fn draw_object(renderer: *sdl.SDL_Renderer, mover: *const Mover, objectType: Mov
     if (sdl.SDL_RenderDrawLines(renderer, cPoints, @intCast(c_int, points.len)) < 0) {
         log_sdl_error();
     }
+
+    draw_bounding_circle(renderer, mover, isColliding);
 }

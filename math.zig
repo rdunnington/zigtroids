@@ -49,6 +49,14 @@ pub const Vector3 = struct {
         };
     }
 
+    pub fn sub(v1: Vector3, v2: Vector3) Vector3 {
+        return Vector3{
+            .x = v1.x - v2.x,
+            .y = v1.y - v2.y,
+            .z = v1.z - v2.z,
+        };
+    }
+
     pub fn dot(v1: Vector3, v2: Vector3) Vector3 {
         return v1.x * v2.x +
             v1.y * v2.y +
