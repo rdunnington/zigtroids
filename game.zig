@@ -1,11 +1,27 @@
 const std = @import("std");
 const math = @import("math.zig");
 
+const Vector2 = math.Vector2;
 const Vector3 = math.Vector3;
+const Vector4 = math.Vector4;
+const Mat4x4 = math.Mat4x4;
 
 const sdl = @cImport({
     @cInclude("SDL2/SDL.h");
 });
+
+const Color = struct {
+    r: u8 = 0,
+    g: u8 = 0,
+    b: u8 = 0,
+    a: u8 = 0,
+};
+
+const COLOR_WHITE = Color{ .r = 255, .g = 255, .b = 255, .a = 255 };
+const COLOR_GRAY = Color{ .r = 128, .g = 128, .b = 128, .a = 255 };
+const COLOR_RED = Color{ .r = 255, .a = 255 };
+const COLOR_GREEN = Color{ .g = 255, .a = 255 };
+const COLOR_BLUE = Color{ .b = 255, .a = 255 };
 
 const Time = struct {
     elapsed_from_start: f64,
@@ -16,19 +32,32 @@ const InputState = struct {
     left: bool = false,
     right: bool = false,
     forward: bool = false,
+    back: bool = false,
 };
 
-// comptime std.debug.assert(@sizeof(InputState) <= 1);
+const Fixed = struct {
+    pos: Vector3 = Vector3{},
+};
 
 const Mover = struct {
-    pos: math.Vector3 = math.Vector3{},
+    velocity: Vector3 = Vector3{},
+    pos: Vector3 = Vector3{},
     scale: f32 = 1,
     rot: f32 = 0,
-    velocity: Vector3,
 };
 
+const Camera = struct {
+    pos: Vector3 = Vector3{},
+};
+
+const DrawInfo = struct {
+    renderer: *sdl.SDL_Renderer,
+    camera: Camera,
+    viewport: Vector2,
+};
+
+const PositionList = std.ArrayList(Vector3);
 const MoverList = std.ArrayList(Mover);
-// const TransformList = std.ArrayList(math.Mat4x4);
 
 const GameState = struct {
     renderer: *sdl.SDL_Renderer,
@@ -37,8 +66,13 @@ const GameState = struct {
     previous_time: Time,
     rng: std.rand.DefaultPrng,
 
+    camera: Camera,
+    world_bounds: Vector2,
+    stars: PositionList,
     movers: MoverList,
     input: InputState,
+
+    debug_camera: bool,
 };
 
 const MoverType = enum {
@@ -46,19 +80,14 @@ const MoverType = enum {
     Asteroid,
 };
 
-const WindowSize = struct {
-    width: f32,
-    height: f32,
-};
-
-fn get_window_size(window: *sdl.SDL_Window) WindowSize {
+fn get_window_size(window: *sdl.SDL_Window) Vector2 {
     var width: c_int = 0;
     var height: c_int = 0;
     sdl.SDL_GetWindowSize(window, &width, &height);
 
-    return WindowSize{
-        .width = @intToFloat(f32, width),
-        .height = @intToFloat(f32, height),
+    return Vector2{
+        .x = @intToFloat(f32, width),
+        .y = @intToFloat(f32, height),
     };
 }
 
@@ -68,6 +97,7 @@ pub fn main() u8 {
     }
     defer sdl.SDL_Quit();
 
+    // TODO sdl.SDL_WINDOW_RESIZABLE - game exits with error code when we resize??
     var window: *sdl.SDL_Window = sdl.SDL_CreateWindow(
         c"Zigtroids",
         200,
@@ -81,6 +111,8 @@ pub fn main() u8 {
     var renderer: *sdl.SDL_Renderer = sdl.SDL_CreateRenderer(window, -1, sdl.SDL_RENDERER_ACCELERATED).?;
     defer sdl.SDL_DestroyRenderer(renderer);
 
+    const world_bounds = math.Vector2{ .x = 1600, .y = 1000 };
+
     var gamestate = GameState{
         .renderer = renderer,
         .window = window,
@@ -90,15 +122,27 @@ pub fn main() u8 {
             .dt = 0,
         },
         .rng = std.rand.DefaultPrng.init(0),
+        .camera = Camera{},
+        .world_bounds = world_bounds,
         .input = InputState{},
+        .stars = PositionList.init(std.heap.c_allocator),
         .movers = MoverList.init(std.heap.c_allocator),
-        // .transforms = TransformList.init(std.heap.c_allocator),
+
+        .debug_camera = false,
     };
 
-    gamestate.movers.resize(2) catch |err| std.debug.warn("failed to alloc ships: {}", err);
-    {
-        const WINDOWSIZE = get_window_size(gamestate.window);
+    // stars
+    gamestate.stars.resize(2000) catch |err| std.debug.warn("failed to alloc ships: {}", err);
+    for (gamestate.stars.toSlice()) |*pos| {
+        const x = gamestate.rng.random.float(f32) * gamestate.world_bounds.x;
+        const y = gamestate.rng.random.float(f32) * gamestate.world_bounds.y;
+        pos.x = x;
+        pos.y = y;
+    }
 
+    // ship and asteroids
+    gamestate.movers.resize(5) catch |err| std.debug.warn("failed to alloc ships: {}", err);
+    {
         var rng = &gamestate.rng.random;
 
         for (gamestate.movers.toSlice()) |*mover, index| {
@@ -106,8 +150,8 @@ pub fn main() u8 {
                 mover.pos = Vector3{ .x = 200, .y = 200, .z = 0 };
                 mover.scale = 20;
             } else {
-                const x = rng.float(f32) * WINDOWSIZE.width;
-                const y = rng.float(f32) * WINDOWSIZE.height;
+                const x = rng.float(f32) * gamestate.world_bounds.x;
+                const y = rng.float(f32) * gamestate.world_bounds.y;
                 const scale = 40 + rng.float(f32) * 40.0;
                 const speed = 0.005 + rng.float(f32) * 0.035;
                 const xdir = rng.float(f32) * 2.0 - 1.0;
@@ -139,6 +183,11 @@ pub fn main() u8 {
                     gamestate.input.right = value;
                 } else if (event.key.keysym.sym == sdl.SDLK_UP) {
                     gamestate.input.forward = value;
+                } else if (event.key.keysym.sym == sdl.SDLK_DOWN) {
+                    gamestate.input.back = value;
+                } else if (event.key.keysym.sym == sdl.SDLK_SPACE and event.type == sdl.SDL_KEYUP) {
+                    std.debug.warn("toggled\n");
+                    gamestate.debug_camera = !gamestate.debug_camera;
                 }
             }
         }
@@ -174,6 +223,12 @@ fn get_time(prev: Time) Time {
 }
 
 fn game_tick(state: *GameState, time: Time) void {
+    var draw_info = DrawInfo{
+        .renderer = state.renderer,
+        .camera = state.camera,
+        .viewport = state.world_bounds,
+    };
+
     if (sdl.SDL_SetRenderDrawColor(state.renderer, 0, 0, 0, 255) < 0) {
         log_sdl_error();
     }
@@ -181,8 +236,73 @@ fn game_tick(state: *GameState, time: Time) void {
         log_sdl_error();
     }
 
-    // player input affects its mover
+    // draw grid lines
+    if (false) {
+        if (sdl.SDL_SetRenderDrawColor(state.renderer, 45, 45, 45, 255) < 0) {
+            log_sdl_error();
+        }
+
+        const step: i32 = 10;
+        var x: c_int = 0;
+        var y: c_int = 0;
+        while (x < state.world_bounds.x) {
+            x += step;
+            if (sdl.SDL_RenderDrawLine(state.renderer, x, 0, x, state.world_bounds.y) < 0) {
+                log_sdl_error();
+            }
+        }
+
+        while (y < state.world_bounds.y) {
+            y += step;
+            if (sdl.SDL_RenderDrawLine(state.renderer, 0, y, state.world_bounds.x, y) < 0) {
+                log_sdl_error();
+            }
+        }
+    }
+
+    // draw starfield
     {
+        draw_stars(draw_info, state.stars.toSliceConst());
+    }
+
+    // draw world border
+    {
+        const border_points = [_]Vector3{
+            Vector3{ .x = 0, .y = 0 },
+            Vector3{
+                .x = state.world_bounds.x,
+                .y = 0,
+            },
+            Vector3{
+                .x = state.world_bounds.x,
+                .y = state.world_bounds.y,
+            },
+            Vector3{
+                .x = 0,
+                .y = state.world_bounds.y,
+            },
+            Vector3{ .x = 0, .y = 0 },
+        };
+
+        var points = transform_points_with_positions(draw_info, border_points);
+        draw_line_strip(draw_info, COLOR_GREEN, points.toSlice());
+    }
+
+    // player input affects its mover
+
+    if (state.debug_camera) {
+        var x: f32 = 0.0;
+        var y: f32 = 0.0;
+
+        var step: f32 = 700.0 * time.dt;
+
+        x += if (state.input.right) -step else 0.0;
+        x += if (state.input.left) step else 0.0;
+        y += if (state.input.back) -step else 0.0;
+        y += if (state.input.forward) step else 0.0;
+
+        state.camera.pos = state.camera.pos.add(Vector3{ .x = x, .y = y });
+    } else {
         const playerIndex = 0;
         var mover = &state.movers.toSlice()[playerIndex];
 
@@ -207,146 +327,184 @@ fn game_tick(state: *GameState, time: Time) void {
         }
     }
 
+    std.debug.warn("camera pos: ({:.2}, {:.2})\n", state.camera.pos.x, state.camera.pos.y);
+    // std.debug.warn("player pos: ({}, {})\n\n", state.movers.at(0).pos.x, state.movers.at(0).pos.y);
+
     var collidingState = std.ArrayList(bool).init(std.heap.c_allocator);
     collidingState.resize(state.movers.count()) catch |err| std.debug.warn("failed to resize collidingState");
-    for (state.movers.toSlice()) |mover1, i| {
+    for (state.movers.toSlice()) |*mover1, i| {
         for (state.movers.toSlice()) |mover2, j| {
             if (i == j) {
                 continue;
             }
-            var lengthSq1 = mover1.scale * mover1.scale;
-            var lengthSq2 = mover2.scale * mover2.scale;
+            var collisionLength = mover1.scale + mover2.scale;
             var distanceSq = mover1.pos.sub(mover2.pos).lengthSq();
-            var isColliding = distanceSq <= lengthSq1 + lengthSq2;
-
-            // if (i == 0 and j == 1) {
-            // std.debug.warn("{} {} {} {}\n", lengthSq1, lengthSq2, distanceSq, isColliding);
-            // }
+            var isColliding = distanceSq <= collisionLength * collisionLength;
 
             collidingState.set(i, collidingState.at(i) or isColliding);
             collidingState.set(j, collidingState.at(j) or isColliding);
 
-            // std.debug.warn("({}, {}) {} {}\n", i, j, collidingState.at(i), collidingState.at(j));
+            // if (isColliding and i == 0) {
+            //     var length = mover1.velocity.length();
+            //     var bounceDir = mover1.velocity.normalize();
+            //     var bounceVel = bounceDir.scale(-length * 0.8);
+            //     std.debug.warn("{} {}\n", bounceVel.x, bounceVel.y);
+            //     mover1.velocity = bounceVel;
+            //     mover1.pos = mover1.pos.add(bounceDir.scale(-std.math.sqrt(distanceSq)));
+            // }
         }
+    }
+
+    if (!state.debug_camera) {
+        const windowsize = get_window_size(state.window).toVector3().scale(0.5);
+        state.camera.pos = state.movers.at(0).pos.sub(windowsize);
     }
 
     // std.debug.warn("{} {}\n", collidingState.at(0), collidingState.at(1));
 
-    const WINDOWSIZE = get_window_size(state.window);
     for (state.movers.toSlice()) |*mover, index| {
         mover.pos = mover.pos.add(mover.velocity);
-        mover.pos.x = @mod(mover.pos.x + WINDOWSIZE.width, WINDOWSIZE.width);
-        mover.pos.y = @mod(mover.pos.y + WINDOWSIZE.height, WINDOWSIZE.height);
+        mover.pos.x = @mod(mover.pos.x + state.world_bounds.x, state.world_bounds.x);
+        mover.pos.y = @mod(mover.pos.y + state.world_bounds.y, state.world_bounds.y);
 
         const objectType = switch (index) {
             0 => MoverType.PlayerShip,
             else => MoverType.Asteroid,
         };
-        draw_object(state.renderer, mover, objectType, collidingState.at(index));
-        // draw_object(state.renderer, mover, objectType, false);
+        draw_object(draw_info, mover, objectType, collidingState.at(index));
     }
 
     sdl.SDL_RenderPresent(state.renderer);
 }
 
-fn vector3_to_sdl(v: math.Vector3) sdl.SDL_Point {
+fn vector3_to_sdl(v: Vector3) sdl.SDL_Point {
     return sdl.SDL_Point{
         .x = @floatToInt(c_int, v.x),
         .y = @floatToInt(c_int, v.y),
     };
 }
 
-const SHIP_POINTS = [_]math.Vector3{
-    math.Vector3{ .x = 0.0, .y = 0.5, .z = 0.0 },
-    math.Vector3{ .x = 0.5, .y = -0.35, .z = 0.0 },
-    math.Vector3{ .x = 0.0, .y = 0.0, .z = 0.0 },
-    math.Vector3{ .x = -0.5, .y = -0.35, .z = 0.0 },
-    math.Vector3{ .x = 0.0, .y = 0.5, .z = 0.0 },
+// fn vector3_to_sdl(v: Vector3) sdl.SDL_Point {
+//     return sdl.SDL_Point{
+//         .x = @floatToInt(c_int, v.x),
+//         .y = @floatToInt(c_int, v.y),
+//     };
+// }
+
+const SHIP_POINTS = [_]Vector3{
+    Vector3{ .x = 0.0, .y = 0.5, .z = 0.0 },
+    Vector3{ .x = 0.5, .y = -0.35, .z = 0.0 },
+    Vector3{ .x = 0.0, .y = 0.0, .z = 0.0 },
+    Vector3{ .x = -0.5, .y = -0.35, .z = 0.0 },
+    Vector3{ .x = 0.0, .y = 0.5, .z = 0.0 },
 };
 
-const ASTEROID_POINTS = [_]math.Vector3{
-    math.Vector3{ .x = 0.0, .y = 0.8, .z = 0.0 },
-    math.Vector3{ .x = 0.8, .y = 0.4, .z = 0.0 },
-    math.Vector3{ .x = 0.6, .y = -0.2, .z = 0.0 },
-    math.Vector3{ .x = 0.2, .y = -0.6, .z = 0.0 },
-    math.Vector3{ .x = -0.2, .y = -0.4, .z = 0.0 },
-    math.Vector3{ .x = -0.4, .y = -0.1, .z = 0.0 },
-    math.Vector3{ .x = -0.6, .y = 0.2, .z = 0.0 },
-    math.Vector3{ .x = -0.4, .y = 0.6, .z = 0.0 },
-    math.Vector3{ .x = 0.0, .y = 0.8, .z = 0.0 },
+const ASTEROID_POINTS = [_]Vector3{
+    Vector3{ .x = 0.0, .y = 0.8, .z = 0.0 },
+    Vector3{ .x = 0.8, .y = 0.4, .z = 0.0 },
+    Vector3{ .x = 0.6, .y = -0.2, .z = 0.0 },
+    Vector3{ .x = 0.2, .y = -0.6, .z = 0.0 },
+    Vector3{ .x = -0.2, .y = -0.4, .z = 0.0 },
+    Vector3{ .x = -0.4, .y = -0.1, .z = 0.0 },
+    Vector3{ .x = -0.6, .y = 0.2, .z = 0.0 },
+    Vector3{ .x = -0.4, .y = 0.6, .z = 0.0 },
+    Vector3{ .x = 0.0, .y = 0.8, .z = 0.0 },
 };
 
 const CIRCLE_POINTS = generate_circle();
 
-fn generate_circle() [32]math.Vector3 {
-    var points: [32]math.Vector3 = undefined;
+const SdlPointsList = std.ArrayList(sdl.SDL_Point);
+
+fn generate_circle() [32]Vector3 {
+    var points: [32]Vector3 = undefined;
     for (points) |*point, i| {
         var rads = std.math.pi * 2.0 * (@intToFloat(f32, i) / @intToFloat(f32, points.len - 1));
         const x: f32 = std.math.cos(rads);
         const y: f32 = std.math.sin(rads);
-        point.* = math.Vector3{ .x = x, .y = y, .z = 0 };
+        point.* = Vector3{ .x = x, .y = y, .z = 0 };
     }
     return points;
 }
 
-fn draw_bounding_circle(renderer: *sdl.SDL_Renderer, mover: *const Mover, isColliding: bool) void {
-    const points = CIRCLE_POINTS;
-    var sdlPoints = std.ArrayList(sdl.SDL_Point).init(std.heap.c_allocator);
-    sdlPoints.resize(points.len) catch |err| std.debug.warn("Failed to resize sdlPoints: {}", err);
+fn draw_bounding_circle(draw_info: DrawInfo, mover: *const Mover, isColliding: bool) void {
+    const color = if (isColliding) COLOR_RED else COLOR_GRAY;
+    const sdlPoints = transform_points_with_mover(draw_info, CIRCLE_POINTS, mover);
 
-    for (points) |point, i| {
-        var p = point.scale(mover.scale);
-        p = p.rotateZ(mover.rot);
-        p = p.add(mover.pos);
-
-        sdlPoints.set(i, vector3_to_sdl(p));
-    }
-
-    const cPoints: [*c]sdl.SDL_Point = &sdlPoints.items[0];
-
-    var r: u8 = 128;
-    var g: u8 = 128;
-    var b: u8 = 128;
-    if (isColliding) {
-        g = 0;
-        b = 0;
-    }
-
-    if (sdl.SDL_SetRenderDrawColor(renderer, r, g, b, 255) < 0) {
-        log_sdl_error();
-    }
-    if (sdl.SDL_RenderDrawLines(renderer, cPoints, @intCast(c_int, points.len)) < 0) {
-        log_sdl_error();
-    }
+    draw_line_strip(draw_info, color, sdlPoints.toSliceConst());
 }
 
-fn draw_object(renderer: *sdl.SDL_Renderer, mover: *const Mover, objectType: MoverType, isColliding: bool) void {
+fn draw_object(draw_info: DrawInfo, mover: *const Mover, objectType: MoverType, isColliding: bool) void {
     const points = switch (objectType) {
         MoverType.PlayerShip => SHIP_POINTS,
         MoverType.Asteroid => ASTEROID_POINTS,
     };
 
-    var sdlPoints = std.ArrayList(sdl.SDL_Point).init(std.heap.c_allocator);
+    var sdlPoints = transform_points_with_mover(draw_info, points, mover);
+
+    draw_line_strip(draw_info, COLOR_GRAY, sdlPoints.toSliceConst());
+
+    draw_bounding_circle(draw_info, mover, isColliding);
+}
+
+fn draw_stars(draw_info: DrawInfo, points: []const Vector3) void {
+    var sdlPoints = transform_points_with_positions(draw_info, points);
+    draw_points(draw_info, COLOR_GRAY, sdlPoints.toSliceConst());
+}
+
+fn transform_points_with_positions(draw_info: DrawInfo, points: []const Vector3) SdlPointsList {
+    var sdlPoints = SdlPointsList.init(std.heap.c_allocator);
     sdlPoints.resize(points.len) catch |err| std.debug.warn("Failed to resize sdlPoints: {}", err);
+
+    const viewport_offset = draw_info.viewport.toVector3().scale(0.5);
+
+    for (points) |point, i| {
+        var p = point;
+        p = draw_info.camera.pos.sub(p).add(viewport_offset);
+
+        sdlPoints.set(i, vector3_to_sdl(p));
+    }
+
+    return sdlPoints;
+}
+
+fn transform_points_with_mover(draw_info: DrawInfo, points: []const Vector3, mover: *const Mover) SdlPointsList {
+    var sdlPoints = SdlPointsList.init(std.heap.c_allocator);
+    sdlPoints.resize(points.len) catch |err| std.debug.warn("Failed to resize sdlPoints: {}", err);
+
+    const viewport_offset = draw_info.viewport.toVector3().scale(0.5);
+    //Vector3{ .x = draw_info.viewport.x / 2.0, .y = draw_info.viewport.y / 2.0 };
 
     for (points) |point, i| {
         var p = point.scale(mover.scale);
         p = p.rotateZ(mover.rot);
         p = p.add(mover.pos);
 
+        p = draw_info.camera.pos.sub(p).add(viewport_offset);
+
         sdlPoints.set(i, vector3_to_sdl(p));
     }
 
-    var cPoints: [*c]sdl.SDL_Point = &sdlPoints.items[0];
+    return sdlPoints;
+}
 
-    // const sdlPoints: [*]sdl.SDL_Point = &points;
-
-    if (sdl.SDL_SetRenderDrawColor(renderer, 128, 128, 128, 255) < 0) {
-        log_sdl_error();
-    }
-    if (sdl.SDL_RenderDrawLines(renderer, cPoints, @intCast(c_int, points.len)) < 0) {
+fn draw_line_strip(draw_info: DrawInfo, color: Color, points: []const sdl.SDL_Point) void {
+    if (sdl.SDL_SetRenderDrawColor(draw_info.renderer, color.r, color.g, color.b, color.a) < 0) {
         log_sdl_error();
     }
 
-    draw_bounding_circle(renderer, mover, isColliding);
+    var cPoints: [*c]const sdl.SDL_Point = &points[0];
+    if (sdl.SDL_RenderDrawLines(draw_info.renderer, cPoints, @intCast(c_int, points.len)) < 0) {
+        log_sdl_error();
+    }
+}
+
+fn draw_points(draw_info: DrawInfo, color: Color, points: []const sdl.SDL_Point) void {
+    if (sdl.SDL_SetRenderDrawColor(draw_info.renderer, color.r, color.g, color.b, color.a) < 0) {
+        log_sdl_error();
+    }
+
+    var cPoints: [*c]const sdl.SDL_Point = &points[0];
+    if (sdl.SDL_RenderDrawPoints(draw_info.renderer, cPoints, @intCast(c_int, points.len)) < 0) {
+        log_sdl_error();
+    }
 }

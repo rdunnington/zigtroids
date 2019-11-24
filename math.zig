@@ -3,6 +3,14 @@ const std = @import("std");
 pub const Vector2 = struct {
     x: f32 = 0,
     y: f32 = 0,
+
+    pub fn toVector3(v: Vector2) Vector3 {
+        return Vector3{
+            .x = v.x,
+            .y = v.y,
+            .z = 0.0,
+        };
+    }
 };
 
 pub const Vector3 = struct {
@@ -54,6 +62,22 @@ pub const Vector3 = struct {
             .x = v1.x - v2.x,
             .y = v1.y - v2.y,
             .z = v1.z - v2.z,
+        };
+    }
+
+    pub fn mul(v1: Vector3, v2: Vector3) Vector3 {
+        return Vector3{
+            .x = v1.x * v2.x,
+            .y = v1.y * v2.y,
+            .z = v1.z * v2.z,
+        };
+    }
+
+    pub fn div(v1: Vector3, v2: Vector3) Vector3 {
+        return Vector3{
+            .x = v1.x / v2.x,
+            .y = v1.y / v2.y,
+            .z = v1.z / v2.z,
         };
     }
 
