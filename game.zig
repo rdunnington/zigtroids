@@ -53,7 +53,7 @@ const Camera = struct {
 const DrawInfo = struct {
     renderer: *sdl.SDL_Renderer,
     camera: Camera,
-    viewport: Vector2,
+    viewport_offset: Vector3,
 };
 
 const PositionList = std.ArrayList(Vector3);
@@ -226,7 +226,7 @@ fn game_tick(state: *GameState, time: Time) void {
     var draw_info = DrawInfo{
         .renderer = state.renderer,
         .camera = state.camera,
-        .viewport = state.world_bounds,
+        .viewport_offset = get_window_size(state.window).toVector3().scale(0.5),
     };
 
     if (sdl.SDL_SetRenderDrawColor(state.renderer, 0, 0, 0, 255) < 0) {
@@ -288,18 +288,17 @@ fn game_tick(state: *GameState, time: Time) void {
         draw_line_strip(draw_info, COLOR_GREEN, points.toSlice());
     }
 
-    // player input affects its mover
-
+    // debug camera or ship steering
     if (state.debug_camera) {
         var x: f32 = 0.0;
         var y: f32 = 0.0;
 
         var step: f32 = 700.0 * time.dt;
 
-        x += if (state.input.right) -step else 0.0;
-        x += if (state.input.left) step else 0.0;
-        y += if (state.input.back) -step else 0.0;
-        y += if (state.input.forward) step else 0.0;
+        x += if (state.input.right) step else 0.0;
+        x += if (state.input.left) -step else 0.0;
+        y += if (state.input.back) step else 0.0;
+        y += if (state.input.forward) -step else 0.0;
 
         state.camera.pos = state.camera.pos.add(Vector3{ .x = x, .y = y });
     } else {
@@ -327,8 +326,8 @@ fn game_tick(state: *GameState, time: Time) void {
         }
     }
 
-    std.debug.warn("camera pos: ({:.2}, {:.2})\n", state.camera.pos.x, state.camera.pos.y);
-    // std.debug.warn("player pos: ({}, {})\n\n", state.movers.at(0).pos.x, state.movers.at(0).pos.y);
+    std.debug.warn("camera pos: ({d:.2}, {d:.2})\n", state.camera.pos.x, state.camera.pos.y);
+    std.debug.warn("player pos: ({d:.2}, {d:.2})\n", state.movers.at(0).pos.x, state.movers.at(0).pos.y);
 
     var collidingState = std.ArrayList(bool).init(std.heap.c_allocator);
     collidingState.resize(state.movers.count()) catch |err| std.debug.warn("failed to resize collidingState");
@@ -356,8 +355,7 @@ fn game_tick(state: *GameState, time: Time) void {
     }
 
     if (!state.debug_camera) {
-        const windowsize = get_window_size(state.window).toVector3().scale(0.5);
-        state.camera.pos = state.movers.at(0).pos.sub(windowsize);
+        state.camera.pos = state.movers.at(0).pos;
     }
 
     // std.debug.warn("{} {}\n", collidingState.at(0), collidingState.at(1));
@@ -451,16 +449,16 @@ fn draw_stars(draw_info: DrawInfo, points: []const Vector3) void {
     draw_points(draw_info, COLOR_GRAY, sdlPoints.toSliceConst());
 }
 
+fn transform_point_to_screen_space(point: Vector3, draw_info: *const DrawInfo) Vector3 {
+    return point.sub(draw_info.camera.pos).add(draw_info.viewport_offset);
+}
+
 fn transform_points_with_positions(draw_info: DrawInfo, points: []const Vector3) SdlPointsList {
     var sdlPoints = SdlPointsList.init(std.heap.c_allocator);
     sdlPoints.resize(points.len) catch |err| std.debug.warn("Failed to resize sdlPoints: {}", err);
 
-    const viewport_offset = draw_info.viewport.toVector3().scale(0.5);
-
     for (points) |point, i| {
-        var p = point;
-        p = draw_info.camera.pos.sub(p).add(viewport_offset);
-
+        var p = transform_point_to_screen_space(point, &draw_info);
         sdlPoints.set(i, vector3_to_sdl(p));
     }
 
@@ -471,16 +469,11 @@ fn transform_points_with_mover(draw_info: DrawInfo, points: []const Vector3, mov
     var sdlPoints = SdlPointsList.init(std.heap.c_allocator);
     sdlPoints.resize(points.len) catch |err| std.debug.warn("Failed to resize sdlPoints: {}", err);
 
-    const viewport_offset = draw_info.viewport.toVector3().scale(0.5);
-    //Vector3{ .x = draw_info.viewport.x / 2.0, .y = draw_info.viewport.y / 2.0 };
-
     for (points) |point, i| {
         var p = point.scale(mover.scale);
         p = p.rotateZ(mover.rot);
         p = p.add(mover.pos);
-
-        p = draw_info.camera.pos.sub(p).add(viewport_offset);
-
+        p = transform_point_to_screen_space(p, &draw_info);
         sdlPoints.set(i, vector3_to_sdl(p));
     }
 
