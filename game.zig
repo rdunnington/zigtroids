@@ -33,6 +33,7 @@ const InputState = struct {
     right: bool = false,
     forward: bool = false,
     back: bool = false,
+    shoot: bool = false,
 };
 
 const Fixed = struct {
@@ -54,10 +55,17 @@ const DrawInfo = struct {
     renderer: *sdl.SDL_Renderer,
     camera: Camera,
     viewport_offset: Vector3,
+    world_bounds: Vector2,
+};
+
+const Asteroid = struct {
+    scale_index: u8 = 0, // indexes into ASTEROID_SCALES
 };
 
 const PositionList = std.ArrayList(Vector3);
 const MoverList = std.ArrayList(Mover);
+const MoverTypeList = std.ArrayList(MoverType);
+const AsteroidList = std.ArrayList(Asteroid);
 
 const GameState = struct {
     renderer: *sdl.SDL_Renderer,
@@ -70,6 +78,8 @@ const GameState = struct {
     world_bounds: Vector2,
     stars: PositionList,
     movers: MoverList,
+    mover_types: MoverTypeList,
+    asteroids: AsteroidList,
     input: InputState,
 
     debug_camera: bool,
@@ -78,7 +88,10 @@ const GameState = struct {
 const MoverType = enum {
     PlayerShip,
     Asteroid,
+    Bullet,
 };
+
+const ASTEROID_SCALES = [_]f32{ 15.0, 20.0, 45.0, 100.0 };
 
 fn get_window_size(window: *sdl.SDL_Window) Vector2 {
     var width: c_int = 0;
@@ -91,7 +104,7 @@ fn get_window_size(window: *sdl.SDL_Window) Vector2 {
     };
 }
 
-pub fn main() u8 {
+pub fn main() !u8 {
     if (sdl.SDL_Init(sdl.SDL_INIT_VIDEO | sdl.SDL_INIT_AUDIO) != 0) {
         std.debug.panic("sdl.SDL_Init failed: {c}\n", sdl.SDL_GetError());
     }
@@ -112,6 +125,8 @@ pub fn main() u8 {
     defer sdl.SDL_DestroyRenderer(renderer);
 
     const world_bounds = math.Vector2{ .x = 1600, .y = 1000 };
+    // const world_bounds = get_window_size(window);
+    // const world_bounds = Vector2{ .x = 400, .y = 300 };
 
     var gamestate = GameState{
         .renderer = renderer,
@@ -127,12 +142,14 @@ pub fn main() u8 {
         .input = InputState{},
         .stars = PositionList.init(std.heap.c_allocator),
         .movers = MoverList.init(std.heap.c_allocator),
+        .mover_types = MoverTypeList.init(std.heap.c_allocator),
+        .asteroids = AsteroidList.init(std.heap.c_allocator),
 
         .debug_camera = false,
     };
 
     // stars
-    gamestate.stars.resize(2000) catch |err| std.debug.warn("failed to alloc ships: {}", err);
+    try gamestate.stars.resize(2000);
     for (gamestate.stars.toSlice()) |*pos| {
         const x = gamestate.rng.random.float(f32) * gamestate.world_bounds.x;
         const y = gamestate.rng.random.float(f32) * gamestate.world_bounds.y;
@@ -140,33 +157,57 @@ pub fn main() u8 {
         pos.y = y;
     }
 
-    // ship and asteroids
-    gamestate.movers.resize(5) catch |err| std.debug.warn("failed to alloc ships: {}", err);
+    // player
+    const min_capacity = 256;
+    try gamestate.movers.ensureCapacity(min_capacity);
+    try gamestate.mover_types.ensureCapacity(min_capacity);
+    try gamestate.asteroids.ensureCapacity(min_capacity);
+
+    {
+        const mover = Mover{
+            .pos = Vector3{ .x = 200, .y = 200 },
+            .scale = 20,
+        };
+        try gamestate.movers.append(mover);
+        try gamestate.mover_types.append(MoverType.PlayerShip);
+        try gamestate.asteroids.append(Asteroid{});
+    }
+
+    // asteroids
     {
         var rng = &gamestate.rng.random;
 
-        for (gamestate.movers.toSlice()) |*mover, index| {
-            if (index == 0) {
-                mover.pos = Vector3{ .x = 200, .y = 200, .z = 0 };
-                mover.scale = 20;
-            } else {
-                const x = rng.float(f32) * gamestate.world_bounds.x;
-                const y = rng.float(f32) * gamestate.world_bounds.y;
-                const scale = 40 + rng.float(f32) * 40.0;
-                const speed = 0.005 + rng.float(f32) * 0.035;
-                const xdir = rng.float(f32) * 2.0 - 1.0;
-                const ydir = rng.float(f32) * 2.0 - 1.0;
+        var countAsteroids: i32 = 0;
+        while (countAsteroids < 12) {
+            countAsteroids = countAsteroids + 1;
 
-                mover.pos = Vector3{ .x = x, .y = y, .z = 0 };
-                mover.scale = scale;
-                mover.velocity = (Vector3{ .x = xdir, .y = ydir, .z = 0 }).normalize().scale(speed);
-            }
+            const asteroid = Asteroid{
+                .scale_index = ASTEROID_SCALES.len - 1,
+            };
+
+            const x = rng.float(f32) * gamestate.world_bounds.x;
+            const y = rng.float(f32) * gamestate.world_bounds.y;
+            const scale = ASTEROID_SCALES[asteroid.scale_index];
+            const speed = 0.005 + rng.float(f32) * 0.035;
+            const xdir = rng.float(f32) * 2.0 - 1.0;
+            const ydir = rng.float(f32) * 2.0 - 1.0;
+
+            const mover = Mover{
+                .pos = Vector3{ .x = x, .y = y, .z = 0 },
+                .scale = scale,
+                .velocity = (Vector3{ .x = xdir, .y = ydir }).normalize().scale(speed),
+            };
+
+            try gamestate.movers.append(mover);
+            try gamestate.mover_types.append(MoverType.Asteroid);
+            try gamestate.asteroids.append(asteroid);
         }
     }
 
+    // game loop
     while (!gamestate.quit) {
         const time: Time = get_time(gamestate.previous_time);
-        game_tick(&gamestate, time);
+        try game_tick(&gamestate, time);
         gamestate.previous_time = time;
 
         var event: sdl.SDL_Event = undefined;
@@ -185,7 +226,11 @@ pub fn main() u8 {
                     gamestate.input.forward = value;
                 } else if (event.key.keysym.sym == sdl.SDLK_DOWN) {
                     gamestate.input.back = value;
-                } else if (event.key.keysym.sym == sdl.SDLK_SPACE and event.type == sdl.SDL_KEYUP) {
+                }
+            } else if (event.type == sdl.SDL_KEYUP) {
+                if (event.key.keysym.sym == sdl.SDLK_SPACE) {
+                    gamestate.input.shoot = true;
+                } else if (event.key.keysym.sym == sdl.SDLK_BACKQUOTE) {
                     std.debug.warn("toggled\n");
                     gamestate.debug_camera = !gamestate.debug_camera;
                 }
@@ -203,6 +248,11 @@ pub fn main() u8 {
 // fn bit_clear(byte: u8, bit: u8) u8 {
 //     return bit_set(byte, bit, 0);
 // }
+
+fn addMover(state: *GameState, mover_type: MoverType, mover: Mover) !void {
+    try state.movers.append(mover);
+    try state.mover_types.append(mover_type);
+}
 
 fn log_sdl_error() void {
     var c_err = sdl.SDL_GetError() orelse return;
@@ -222,11 +272,12 @@ fn get_time(prev: Time) Time {
     };
 }
 
-fn game_tick(state: *GameState, time: Time) void {
+fn game_tick(state: *GameState, time: Time) !void {
     var draw_info = DrawInfo{
         .renderer = state.renderer,
         .camera = state.camera,
         .viewport_offset = get_window_size(state.window).toVector3().scale(0.5),
+        .world_bounds = state.world_bounds,
     };
 
     if (sdl.SDL_SetRenderDrawColor(state.renderer, 0, 0, 0, 255) < 0) {
@@ -312,9 +363,9 @@ fn game_tick(state: *GameState, time: Time) void {
         const period = std.math.pi * 2.0;
         mover.rot = @mod(mover.rot + rot * time.dt + period, period);
 
-        if (state.input.forward) {
-            const MAX_ACCELERATION = 0.06;
-            const MAX_VELOCITY_MAGNITUDE = 0.5;
+        if (state.input.forward and !state.input.left and !state.input.right) {
+            const MAX_ACCELERATION = 0.5;
+            const MAX_VELOCITY_MAGNITUDE = 0.7;
             const MAX_VELOCITY_MAGNITUDE_SQ = MAX_VELOCITY_MAGNITUDE * MAX_VELOCITY_MAGNITUDE;
 
             const forward = Vector3{ .x = 0, .y = 1, .z = 0 };
@@ -330,7 +381,7 @@ fn game_tick(state: *GameState, time: Time) void {
     std.debug.warn("player pos: ({d:.2}, {d:.2})\n", state.movers.at(0).pos.x, state.movers.at(0).pos.y);
 
     var collidingState = std.ArrayList(bool).init(std.heap.c_allocator);
-    collidingState.resize(state.movers.count()) catch |err| std.debug.warn("failed to resize collidingState");
+    try collidingState.resize(state.movers.count());
     for (state.movers.toSlice()) |*mover1, i| {
         for (state.movers.toSlice()) |mover2, j| {
             if (i == j) {
@@ -409,6 +460,14 @@ const ASTEROID_POINTS = [_]Vector3{
     Vector3{ .x = 0.0, .y = 0.8, .z = 0.0 },
 };
 
+const BULLET_POINTS = [_]Vector3{
+    Vector3{ .x = 0.5, .y = -0.5 },
+    Vector3{ .x = 0.5, .y = 0.5 },
+    Vector3{ .x = -0.5, .y = 0.5 },
+    Vector3{ .x = -0.5, .y = -0.5 },
+    Vector3{ .x = 0.5, .y = -0.5 },
+};
+
 const CIRCLE_POINTS = generate_circle();
 
 const SdlPointsList = std.ArrayList(sdl.SDL_Point);
@@ -435,6 +494,7 @@ fn draw_object(draw_info: DrawInfo, mover: *const Mover, objectType: MoverType, 
     const points = switch (objectType) {
         MoverType.PlayerShip => SHIP_POINTS,
         MoverType.Asteroid => ASTEROID_POINTS,
+        MoverType.Bullet => BULLET_POINTS,
     };
 
     var sdlPoints = transform_points_with_mover(draw_info, points, mover);
@@ -442,6 +502,30 @@ fn draw_object(draw_info: DrawInfo, mover: *const Mover, objectType: MoverType, 
     draw_line_strip(draw_info, COLOR_GRAY, sdlPoints.toSliceConst());
 
     draw_bounding_circle(draw_info, mover, isColliding);
+
+    // wrapped in worldspace
+    // {
+    //     const to_edge_left: f32 = mover.pos.x;
+    //     const to_edge_right: f32 = draw_info.world_bounds.x - mover.pos.x;
+    //     const to_edge_top: f32 = mover.pos.y;
+    //     const to_edge_bot: f32 = draw_info.world_bounds.y - mover.pos.y;
+
+    //     const mirror_mover_x = Mover{
+
+    //     };
+
+    //     const mirror_x = if (to_edge_left < to_edge_right) draw_info.world_bounds.x + mover.pos.x else -to_edge_right;
+    //     const mirror_y = if (to_edge_top < to_edge_bot) draw_info.world_bounds.y + mover.pos.y else -to_edge_bot;
+    //     const mirror_mover = Mover{
+    //         .pos = Vector3{ .x = mirror_x, .y = mirror_y, .z = mover.pos.z },
+    //         .scale = mover.scale,
+    //         .rot = mover.rot,
+    //     };
+
+    //     sdlPoints = transform_points_with_mover(draw_info, points, &mirror_mover);
+    //     draw_line_strip(draw_info, COLOR_BLUE, sdlPoints.toSliceConst());
+    //     draw_bounding_circle(draw_info, &mirror_mover, isColliding);
+    // }
 }
 
 fn draw_stars(draw_info: DrawInfo, points: []const Vector3) void {
