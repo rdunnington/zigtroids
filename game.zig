@@ -66,6 +66,7 @@ const PositionList = std.ArrayList(Vector3);
 const MoverList = std.ArrayList(Mover);
 const MoverTypeList = std.ArrayList(MoverType);
 const AsteroidList = std.ArrayList(Asteroid);
+const IndexList = std.ArrayList(usize);
 
 const GameState = struct {
     renderer: *sdl.SDL_Renderer,
@@ -76,11 +77,15 @@ const GameState = struct {
 
     camera: Camera,
     world_bounds: Vector2,
+
     stars: PositionList,
+    input: InputState,
+
     movers: MoverList,
     mover_types: MoverTypeList,
     asteroids: AsteroidList,
-    input: InputState,
+
+    delete_list: IndexList,
 
     debug_camera: bool,
 };
@@ -90,6 +95,16 @@ const MoverType = enum {
     Asteroid,
     Bullet,
 };
+
+const COLLISION_MASKS = [_]u8{
+    0b010,
+    0b111,
+    0b010,
+};
+
+comptime {
+    std.debug.assert(@memberCount(MoverType) == COLLISION_MASKS.len);
+}
 
 const ASTEROID_SCALES = [_]f32{ 15.0, 20.0, 45.0, 100.0 };
 
@@ -144,6 +159,8 @@ pub fn main() !u8 {
         .movers = MoverList.init(std.heap.c_allocator),
         .mover_types = MoverTypeList.init(std.heap.c_allocator),
         .asteroids = AsteroidList.init(std.heap.c_allocator),
+
+        .delete_list = IndexList.init(std.heap.c_allocator),
 
         .debug_camera = false,
     };
@@ -227,12 +244,13 @@ pub fn main() !u8 {
                 } else if (event.key.keysym.sym == sdl.SDLK_DOWN) {
                     gamestate.input.back = value;
                 }
-            } else if (event.type == sdl.SDL_KEYUP) {
-                if (event.key.keysym.sym == sdl.SDLK_SPACE) {
-                    gamestate.input.shoot = true;
-                } else if (event.key.keysym.sym == sdl.SDLK_BACKQUOTE) {
-                    std.debug.warn("toggled\n");
-                    gamestate.debug_camera = !gamestate.debug_camera;
+
+                if (event.type == sdl.SDL_KEYUP) {
+                    if (event.key.keysym.sym == sdl.SDLK_SPACE) {
+                        gamestate.input.shoot = true;
+                    } else if (event.key.keysym.sym == sdl.SDLK_BACKQUOTE) {
+                        gamestate.debug_camera = !gamestate.debug_camera;
+                    }
                 }
             }
         }
@@ -354,31 +372,53 @@ fn game_tick(state: *GameState, time: Time) !void {
         state.camera.pos = state.camera.pos.add(Vector3{ .x = x, .y = y });
     } else {
         const playerIndex = 0;
-        var mover = &state.movers.toSlice()[playerIndex];
+        var playerMover = &state.movers.toSlice()[playerIndex];
 
         var rot: f32 = 0.0;
         rot += if (state.input.left) @as(f32, 5.0) else 0.0;
         rot -= if (state.input.right) @as(f32, 5.0) else 0.0;
 
         const period = std.math.pi * 2.0;
-        mover.rot = @mod(mover.rot + rot * time.dt + period, period);
+        playerMover.rot = @mod(playerMover.rot + rot * time.dt + period, period);
+
+        const forward = Vector3{ .x = 0, .y = 1, .z = 0 };
 
         if (state.input.forward and !state.input.left and !state.input.right) {
             const MAX_ACCELERATION = 0.5;
             const MAX_VELOCITY_MAGNITUDE = 0.7;
             const MAX_VELOCITY_MAGNITUDE_SQ = MAX_VELOCITY_MAGNITUDE * MAX_VELOCITY_MAGNITUDE;
 
-            const forward = Vector3{ .x = 0, .y = 1, .z = 0 };
-            const playerForward = forward.rotateZ(mover.rot).normalize().scale(MAX_ACCELERATION * time.dt);
-            mover.velocity = mover.velocity.add(playerForward);
-            if (mover.velocity.lengthSq() > MAX_VELOCITY_MAGNITUDE_SQ) {
-                mover.velocity = mover.velocity.normalize().scale(MAX_VELOCITY_MAGNITUDE);
+            const playerForward = forward.rotateZ(playerMover.rot).normalize().scale(MAX_ACCELERATION * time.dt);
+            playerMover.velocity = playerMover.velocity.add(playerForward);
+            if (playerMover.velocity.lengthSq() > MAX_VELOCITY_MAGNITUDE_SQ) {
+                playerMover.velocity = playerMover.velocity.normalize().scale(MAX_VELOCITY_MAGNITUDE);
             }
+        }
+
+        if (state.input.shoot) {
+            state.input.shoot = false;
+            const BULLET_SPEED = 0.7;
+
+            const player_speed = playerMover.velocity.length();
+            const player_dir = forward.rotateZ(playerMover.rot).normalize();
+
+            const pos = playerMover.pos.add(player_dir.scale(playerMover.scale));
+            const vel = playerMover.velocity.add(player_dir.scale(BULLET_SPEED));
+
+            const mover = Mover{
+                .pos = pos,
+                .velocity = vel,
+                .scale = 2,
+            };
+
+            try state.movers.append(mover);
+            try state.mover_types.append(MoverType.Bullet);
+            try state.asteroids.append(Asteroid{});
         }
     }
 
-    std.debug.warn("camera pos: ({d:.2}, {d:.2})\n", state.camera.pos.x, state.camera.pos.y);
-    std.debug.warn("player pos: ({d:.2}, {d:.2})\n", state.movers.at(0).pos.x, state.movers.at(0).pos.y);
+    // std.debug.warn("camera pos: ({d:.2}, {d:.2})\n", state.camera.pos.x, state.camera.pos.y);
+    // std.debug.warn("player pos: ({d:.2}, {d:.2})\n", state.movers.at(0).pos.x, state.movers.at(0).pos.y);
 
     var collidingState = std.ArrayList(bool).init(std.heap.c_allocator);
     try collidingState.resize(state.movers.count());
@@ -387,12 +427,35 @@ fn game_tick(state: *GameState, time: Time) !void {
             if (i == j) {
                 continue;
             }
+
+            // const MyEnum = enum {
+            //     V1,
+            //     V2,
+            //     V3,
+            // };
+            // var e = MyEnum.V2;
+            // var v = 1 << @intCast(u32, @enumToInt(e));
+
+            const type1: u3 = @enumToInt(state.mover_types.at(i));
+            const type2: u3 = @enumToInt(state.mover_types.at(j));
+
+            const collision_mask1 = COLLISION_MASKS[type1];
+            const collision_mask2 = COLLISION_MASKS[type2];
+
+            const collision_bit1: u32 = @shlExact(@as(u8, 1), type1);
+            const collision_bit2: u32 = @shlExact(@as(u8, 1), type2);
+
             var collisionLength = mover1.scale + mover2.scale;
             var distanceSq = mover1.pos.sub(mover2.pos).lengthSq();
             var isColliding = distanceSq <= collisionLength * collisionLength;
 
-            collidingState.set(i, collidingState.at(i) or isColliding);
-            collidingState.set(j, collidingState.at(j) or isColliding);
+            if (collision_mask1 & collision_bit2 != 0) {
+                collidingState.set(i, collidingState.at(i) or isColliding);
+            }
+
+            if (collision_mask2 & collision_bit1 != 0) {
+                collidingState.set(j, collidingState.at(j) or isColliding);
+            }
 
             // if (isColliding and i == 0) {
             //     var length = mover1.velocity.length();
@@ -416,14 +479,33 @@ fn game_tick(state: *GameState, time: Time) !void {
         mover.pos.x = @mod(mover.pos.x + state.world_bounds.x, state.world_bounds.x);
         mover.pos.y = @mod(mover.pos.y + state.world_bounds.y, state.world_bounds.y);
 
-        const objectType = switch (index) {
-            0 => MoverType.PlayerShip,
-            else => MoverType.Asteroid,
-        };
-        draw_object(draw_info, mover, objectType, collidingState.at(index));
+        const mover_type = state.mover_types.at(index);
+        const is_colliding = collidingState.at(index);
+        draw_object(draw_info, mover, mover_type, is_colliding);
+
+        if (is_colliding and mover_type == MoverType.Bullet) {
+            try state.delete_list.append(index);
+        }
     }
 
     sdl.SDL_RenderPresent(state.renderer);
+
+    // delayed delete in reverse index order
+    std.sort.sort(usize, state.delete_list.toSlice(), delete_list_sorter);
+    // std.sort.sort(usize, state.delete_list.toSlice(), fn (a: usize, b: usize) bool {
+    //     return a > b;
+    // });
+
+    for (state.delete_list.toSlice()) |index| {
+        _ = state.movers.swapRemove(index);
+        _ = state.mover_types.swapRemove(index);
+        _ = state.asteroids.swapRemove(index);
+    }
+    try state.delete_list.resize(0);
+}
+
+fn delete_list_sorter(a: usize, b: usize) bool {
+    return a > b;
 }
 
 fn vector3_to_sdl(v: Vector3) sdl.SDL_Point {
