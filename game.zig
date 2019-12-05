@@ -98,7 +98,7 @@ const MoverType = enum {
 
 const COLLISION_MASKS = [_]u8{
     0b010,
-    0b111,
+    0b100,
     0b010,
 };
 
@@ -357,6 +357,8 @@ fn game_tick(state: *GameState, time: Time) !void {
         draw_line_strip(draw_info, COLOR_GREEN, points.toSlice());
     }
 
+    const forward = Vector3{ .x = 0, .y = 1, .z = 0 };
+
     // debug camera or ship steering
     if (state.debug_camera) {
         var x: f32 = 0.0;
@@ -380,8 +382,6 @@ fn game_tick(state: *GameState, time: Time) !void {
 
         const period = std.math.pi * 2.0;
         playerMover.rot = @mod(playerMover.rot + rot * time.dt + period, period);
-
-        const forward = Vector3{ .x = 0, .y = 1, .z = 0 };
 
         if (state.input.forward and !state.input.left and !state.input.right) {
             const MAX_ACCELERATION = 0.5;
@@ -420,21 +420,20 @@ fn game_tick(state: *GameState, time: Time) !void {
     // std.debug.warn("camera pos: ({d:.2}, {d:.2})\n", state.camera.pos.x, state.camera.pos.y);
     // std.debug.warn("player pos: ({d:.2}, {d:.2})\n", state.movers.at(0).pos.x, state.movers.at(0).pos.y);
 
+    if (!state.debug_camera) {
+        state.camera.pos = state.movers.at(0).pos;
+    }
+
+    // std.debug.warn("{} {}\n", collidingState.at(0), collidingState.at(1));
+
     var collidingState = std.ArrayList(bool).init(std.heap.c_allocator);
     try collidingState.resize(state.movers.count());
+
     for (state.movers.toSlice()) |*mover1, i| {
         for (state.movers.toSlice()) |mover2, j| {
             if (i == j) {
                 continue;
             }
-
-            // const MyEnum = enum {
-            //     V1,
-            //     V2,
-            //     V3,
-            // };
-            // var e = MyEnum.V2;
-            // var v = 1 << @intCast(u32, @enumToInt(e));
 
             const type1: u3 = @enumToInt(state.mover_types.at(i));
             const type2: u3 = @enumToInt(state.mover_types.at(j));
@@ -468,12 +467,6 @@ fn game_tick(state: *GameState, time: Time) !void {
         }
     }
 
-    if (!state.debug_camera) {
-        state.camera.pos = state.movers.at(0).pos;
-    }
-
-    // std.debug.warn("{} {}\n", collidingState.at(0), collidingState.at(1));
-
     for (state.movers.toSlice()) |*mover, index| {
         mover.pos = mover.pos.add(mover.velocity);
         mover.pos.x = @mod(mover.pos.x + state.world_bounds.x, state.world_bounds.x);
@@ -485,6 +478,43 @@ fn game_tick(state: *GameState, time: Time) !void {
 
         if (is_colliding and mover_type == MoverType.Bullet) {
             try state.delete_list.append(index);
+        }
+
+        if (is_colliding and mover_type == MoverType.Asteroid) {
+            var asteroid: *Asteroid = &state.asteroids.toSlice()[index];
+
+            // scale this guy down
+            if (asteroid.scale_index == 0) {
+                try state.delete_list.append(index);
+            } else {
+                const old_speed = mover.velocity.length();
+
+                // 10-25% speed increase
+                const new_speed1 = old_speed * (1.1 + state.rng.random.float(f32) * 0.15);
+                const new_speed2 = old_speed * (1.1 + state.rng.random.float(f32) * 0.15);
+
+                const new_dir1 = state.rng.random.float(f32) * std.math.pi * 2.0;
+                const new_dir2 = state.rng.random.float(f32) * std.math.pi * 2.0;
+
+                const vel1 = forward.rotateZ(new_dir1).scale(new_speed1);
+                const vel2 = forward.rotateZ(new_dir2).scale(new_speed2);
+
+                asteroid.scale_index = asteroid.scale_index - 1;
+
+                mover.scale = ASTEROID_SCALES[asteroid.scale_index];
+                mover.velocity = vel1;
+
+                var mover_clone: Mover = mover.*;
+                mover_clone.velocity = vel2;
+
+                // offset positions so they look like individual asteroids
+                mover.pos = mover.pos.add(mover.velocity.scale(100.0));
+                mover_clone.pos = mover_clone.pos.add(mover_clone.velocity.scale(100.0));
+
+                try state.movers.append(mover_clone);
+                try state.mover_types.append(MoverType.Asteroid);
+                try state.asteroids.append(asteroid.*);
+            }
         }
     }
 
