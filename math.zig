@@ -18,9 +18,9 @@ pub const Vector3 = struct {
     y: f32 = 0,
     z: f32 = 0,
 
-    const right = Vector3{ .x = 1, .y = 0, .z = 0 };
-    const up = Vector3{ .x = 0, .y = 1, .z = 0 };
-    const forward = Vector3{ .x = 0, .y = 0, .z = 1 };
+    pub const right = Vector3{ .x = 1, .y = 0, .z = 0 };
+    pub const up = Vector3{ .x = 0, .y = 1, .z = 0 };
+    pub const forward = Vector3{ .x = 0, .y = 0, .z = 1 };
 
     pub fn lengthSq(v: Vector3) f32 {
         return v.x * v.x +
@@ -49,42 +49,50 @@ pub const Vector3 = struct {
         };
     }
 
-    pub fn add(v1: Vector3, v2: Vector3) Vector3 {
+    pub fn add(a: Vector3, b: Vector3) Vector3 {
         return Vector3{
-            .x = v1.x + v2.x,
-            .y = v1.y + v2.y,
-            .z = v1.z + v2.z,
+            .x = a.x + b.x,
+            .y = a.y + b.y,
+            .z = a.z + b.z,
         };
     }
 
-    pub fn sub(v1: Vector3, v2: Vector3) Vector3 {
+    pub fn sub(a: Vector3, b: Vector3) Vector3 {
         return Vector3{
-            .x = v1.x - v2.x,
-            .y = v1.y - v2.y,
-            .z = v1.z - v2.z,
+            .x = a.x - b.x,
+            .y = a.y - b.y,
+            .z = a.z - b.z,
         };
     }
 
-    pub fn mul(v1: Vector3, v2: Vector3) Vector3 {
+    pub fn mul(a: Vector3, b: Vector3) Vector3 {
         return Vector3{
-            .x = v1.x * v2.x,
-            .y = v1.y * v2.y,
-            .z = v1.z * v2.z,
+            .x = a.x * b.x,
+            .y = a.y * b.y,
+            .z = a.z * b.z,
         };
     }
 
-    pub fn div(v1: Vector3, v2: Vector3) Vector3 {
+    pub fn div(a: Vector3, b: Vector3) Vector3 {
         return Vector3{
-            .x = v1.x / v2.x,
-            .y = v1.y / v2.y,
-            .z = v1.z / v2.z,
+            .x = a.x / b.x,
+            .y = a.y / b.y,
+            .z = a.z / b.z,
         };
     }
 
-    pub fn dot(v1: Vector3, v2: Vector3) Vector3 {
-        return v1.x * v2.x +
-            v1.y * v2.y +
-            v1.z * v2.z;
+    pub fn dot(a: Vector3, b: Vector3) f32 {
+        return a.x * b.x +
+            a.y * b.y +
+            a.z * b.z;
+    }
+
+    pub fn cross(a: Vector3, b: Vector3) Vector3 {
+        return Vector3{
+            .x = a.y * b.z - a.z * b.y,
+            .y = a.z * b.x - a.x * b.z,
+            .z = a.x * b.y - a.y * b.x,
+        };
     }
 
     pub fn asVec4(v: Vector3) Vector4 {
@@ -130,20 +138,20 @@ pub const Vector4 = struct {
         };
     }
 
-    pub fn add(v1: Vector4, v2: Vector4) Vector4 {
+    pub fn add(a: Vector4, b: Vector4) Vector4 {
         return Vector4{
-            .x = v1.x + v2.x,
-            .y = v1.y + v2.y,
-            .z = v1.z + v2.z,
-            .w = v1.w + v2.w,
+            .x = a.x + b.x,
+            .y = a.y + b.y,
+            .z = a.z + b.z,
+            .w = a.w + b.w,
         };
     }
 
-    pub fn dot(v1: Vector4, v2: Vector4) f32 {
-        return v1.x * v2.x +
-            v1.y * v2.y +
-            v1.z * v2.z +
-            v1.w * v2.w;
+    pub fn dot(a: Vector4, b: Vector4) f32 {
+        return a.x * b.x +
+            a.y * b.y +
+            a.z * b.z +
+            a.w * b.w;
     }
 };
 
