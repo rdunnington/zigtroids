@@ -780,11 +780,11 @@ const ASTEROID_POINTS = [_]Vector3{
 };
 
 const BULLET_POINTS = [_]Vector3{
-    Vector3{ .x = 0.5, .y = -0.5 },
-    Vector3{ .x = 0.5, .y = 0.5 },
-    Vector3{ .x = -0.5, .y = 0.5 },
-    Vector3{ .x = -0.5, .y = -0.5 },
-    Vector3{ .x = 0.5, .y = -0.5 },
+    Vector3{ .x = 1.0, .y = -1.0 },
+    Vector3{ .x = 1.0, .y = 1.0 },
+    Vector3{ .x = -1.0, .y = 1.0 },
+    Vector3{ .x = -1.0, .y = -1.0 },
+    Vector3{ .x = 1.0, .y = -1.0 },
 };
 
 const CIRCLE_POINTS = generate_circle();
@@ -829,7 +829,7 @@ fn draw_object(draw_info: DrawInfo, mover: *const Mover, object_type: MoverType,
     draw_line_strip(draw_info, color, sdl_points.toSliceConst());
     sdl_points.deinit();
 
-    draw_bounding_circle(draw_info, mover, is_colliding);
+    // draw_bounding_circle(draw_info, mover, is_colliding);
 
     // wrapped in worldspace
     // {
