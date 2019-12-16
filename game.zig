@@ -24,8 +24,8 @@ const COLOR_GREEN = Color{ .g = 255, .a = 255 };
 const COLOR_BLUE = Color{ .b = 255, .a = 255 };
 
 const Time = struct {
-    total_elapsed: f64,
-    dt: f32,
+    total_elapsed: f64 = 0.0,
+    dt: f32 = 0.0,
 };
 
 const InputState = struct {
@@ -82,12 +82,95 @@ const EnemySpawner = struct {
     last_spawn_time: f64 = 0.0,
 };
 
+const EntityId = struct {
+    id: u32,
+};
+
+const NewEntityDesc = struct {
+    id: EntityId,
+    mover_type: MoverType,
+    mover: Mover,
+    optional_asteroid: ?Asteroid,
+    optional_fighter: ?Fighter,
+};
+
+fn MakeSystem(comptime ComponentType: type) type {
+    return struct {
+        const Self = @This();
+        const EC = struct {
+            component: ComponentType,
+            entity: EntityId,
+        };
+        const ECListType = std.ArrayList(EC);
+        const EntityMapType = std.AutoHashMap(EntityId, usize);
+
+        components: ECListType,
+        entity_lookup: EntityMapType,
+
+        pub fn init(allocator: *std.mem.Allocator) Self {
+            return Self{
+                .components = ECListType.init(allocator),
+                .entity_lookup = EntityMapType.init(allocator),
+            };
+        }
+
+        pub fn deinit(system: *Self) void {
+            system.components.deinit();
+            system.entity_lookup.deinit();
+        }
+
+        pub fn add(system: *Self, component: ComponentType, entity: EntityId) !void {
+            const ec = EC{
+                .component = component,
+                .entity = entity,
+            };
+            try system.entity_lookup.putNoClobber(entity, system.components.count());
+            try system.components.append(ec);
+        }
+
+        pub fn remove(system: *Self, entity: EntityId) !void {
+            var removed = system.entity_lookup.remove(entity) orelse unreachable;
+            _ = try system.components.swapRemoveOrError(removed.value);
+        }
+
+        pub fn get(system: *Self, entity: EntityId) !*ComponentType {
+            var index = system.entity_lookup.getValue(entity) orelse return error.NOT_FOUND;
+            return &system.components.at(index).component;
+        }
+
+        pub fn getNullable(system: *Self, entity: EntityId) ?*ComponentType {
+            return try system.get(entity) catch |err| return null;
+        }
+
+        pub fn toSlice(system: *Self) []EC {
+            return system.components.toSlice();
+        }
+
+        pub fn toSliceConst(system: *Self) []const EC {
+            return system.components.toSliceConst();
+        }
+
+        pub fn count(system: *Self) usize {
+            return system.components.count();
+        }
+    };
+}
+
+// const MoverList = std.ArrayList(Mover);
+// const MoverTypeList = std.ArrayList(MoverType);
+// const AsteroidList = std.ArrayList(Asteroid);
+// const FighterList = std.ArrayList(Fighter);
+
+const MoverSystem = MakeSystem(Mover);
+const MoverTypeSystem = MakeSystem(MoverType);
+const AsteroidSystem = MakeSystem(Asteroid);
+const FighterSystem = MakeSystem(Fighter);
+
+const EntityList = std.ArrayList(EntityId);
 const PositionList = std.ArrayList(Vector3);
-const MoverList = std.ArrayList(Mover);
-const MoverTypeList = std.ArrayList(MoverType);
-const AsteroidList = std.ArrayList(Asteroid);
-const FighterList = std.ArrayList(Fighter);
-const IndexList = std.ArrayList(usize);
+const NewEntityDescList = std.ArrayList(NewEntityDesc);
+
+const ENTITY_ID_INVALID = EntityId{ .id = 0 };
 
 const GameState = struct {
     renderer: *sdl.SDL_Renderer,
@@ -102,14 +185,22 @@ const GameState = struct {
     stars: PositionList,
     input: InputState,
 
-    mover_types: MoverTypeList,
-    movers: MoverList,
-    asteroids: AsteroidList,
-    fighters: FighterList,
+    // mover_types: MoverTypeList,
+    // movers: MoverList,
+    // asteroids: AsteroidList,
+    // fighters: FighterList,
+    entities: EntityList,
+    mover_types: MoverTypeSystem,
+    movers: MoverSystem,
+    asteroids: AsteroidSystem,
+    fighters: FighterSystem,
 
     enemy_spawner: EnemySpawner,
 
-    delete_list: IndexList,
+    delete_list: EntityList,
+    new_entities: NewEntityDescList,
+    next_entity_id: u32 = 0,
+    player_entity_id: EntityId = ENTITY_ID_INVALID,
 
     debug_camera: bool,
 };
@@ -120,6 +211,18 @@ const MoverType = enum {
     Bullet,
     Fighter,
 };
+
+// const CollisionType = enum {
+//     PlayerShip,
+//     Asteroid,
+//     Bullet,
+//     Fighter,
+// };
+
+// const CollisionComponent = struct {
+//     type: CollisionType,
+//     mask: u32 = 0,
+// };
 
 const COLLISION_MASKS = [_]u8{
     0b0010,
@@ -157,7 +260,7 @@ pub fn main() !u8 {
         200,
         200,
         @intCast(c_int, 640),
-        @intCast(c_int, 400),
+        @intCast(c_int, 480),
         sdl.SDL_WINDOW_OPENGL | sdl.SDL_WINDOW_ALLOW_HIGHDPI,
     ).?;
     defer sdl.SDL_DestroyWindow(window);
@@ -182,16 +285,24 @@ pub fn main() !u8 {
         .world_bounds = world_bounds,
         .input = InputState{},
         .stars = PositionList.init(std.heap.c_allocator),
-        .mover_types = MoverTypeList.init(std.heap.c_allocator),
-        .movers = MoverList.init(std.heap.c_allocator),
-        .asteroids = AsteroidList.init(std.heap.c_allocator),
-        .fighters = FighterList.init(std.heap.c_allocator),
+
+        // .mover_types = MoverTypeList.init(std.heap.c_allocator),
+        // .movers = MoverList.init(std.heap.c_allocator),
+        // .asteroids = AsteroidList.init(std.heap.c_allocator),
+        // .fighters = FighterList.init(std.heap.c_allocator),
+
+        .entities = EntityList.init(std.heap.c_allocator),
+        .mover_types = MoverTypeSystem.init(std.heap.c_allocator),
+        .movers = MoverSystem.init(std.heap.c_allocator),
+        .asteroids = AsteroidSystem.init(std.heap.c_allocator),
+        .fighters = FighterSystem.init(std.heap.c_allocator),
 
         .enemy_spawner = EnemySpawner{
             .last_spawn_time = 0.0,
         },
 
-        .delete_list = IndexList.init(std.heap.c_allocator),
+        .delete_list = EntityList.init(std.heap.c_allocator),
+        .new_entities = NewEntityDescList.init(std.heap.c_allocator),
 
         .debug_camera = false,
     };
@@ -206,19 +317,13 @@ pub fn main() !u8 {
     }
 
     // player
-    const min_capacity = 256;
-    try gamestate.mover_types.ensureCapacity(min_capacity);
-    try gamestate.movers.ensureCapacity(min_capacity);
-    try gamestate.asteroids.ensureCapacity(min_capacity);
-    try gamestate.fighters.ensureCapacity(min_capacity);
-
     {
         const mover = Mover{
             .pos = Vector3{ .x = 200, .y = 200 },
             .scale = 10,
         };
 
-        try add_object(&gamestate, MoverType.PlayerShip, &mover, null, null);
+        gamestate.player_entity_id = try new_entity_delayed(&gamestate, MoverType.PlayerShip, &mover, null, null);
     }
 
     // asteroids
@@ -246,15 +351,16 @@ pub fn main() !u8 {
                 .velocity = (Vector3{ .x = xdir, .y = ydir }).normalize().scale(speed),
             };
 
-            try add_object(&gamestate, MoverType.Asteroid, &mover, &asteroid, null);
+            _ = try new_entity_delayed(&gamestate, MoverType.Asteroid, &mover, &asteroid, null);
         }
     }
+
+    // make sure entities are there for the first frame of the loop
+    try pump_entity_queues(&gamestate);
 
     // game loop
     while (!gamestate.quit) {
         const time: Time = get_time(gamestate.previous_time);
-
-        // std.debug.warn("elapsed: {d:.4}, dt: {d:.4}\n", time.total_elapsed, time.dt);
 
         try game_tick(&gamestate, time);
         gamestate.previous_time = time;
@@ -291,19 +397,56 @@ pub fn main() !u8 {
     return 0;
 }
 
-fn add_object(state: *GameState, mover_type: MoverType, mover: *const Mover, optional_asteroid: ?*const Asteroid, optional_fighter: ?*const Fighter) !void {
-    const default_asteroid = Asteroid{};
-    const default_fighter = Fighter{ .None = None{} };
+fn new_entity_delayed(state: *GameState, mover_type: MoverType, mover: *const Mover, optional_asteroid: ?*const Asteroid, optional_fighter: ?*const Fighter) !EntityId {
+    state.next_entity_id = state.next_entity_id + 1;
+    const id = EntityId{
+        .id = state.next_entity_id,
+    };
 
-    const safe_asteroid = if (optional_asteroid) |asteroid| asteroid else &default_asteroid;
-    const safe_fighter = if (optional_fighter) |fighter| fighter else &default_fighter;
+    var desc = NewEntityDesc{
+        .id = id,
+        .mover_type = mover_type,
+        .mover = mover.*,
+        .optional_asteroid = if (optional_asteroid) |asteroid| asteroid.* else null,
+        .optional_fighter = if (optional_fighter) |fighter| fighter.* else null,
+    };
 
-    try state.mover_types.append(mover_type);
-    try state.movers.append(mover.*);
-    try state.asteroids.append(safe_asteroid.*);
-    try state.fighters.append(safe_fighter.*);
+    try state.new_entities.append(desc);
 
-    std.debug.assert(state.fighters.count() == state.movers.count());
+    // try state.entities.append(id);
+    // try state.mover_types.add(mover_type, id);
+    // try state.movers.add(mover.*, id);
+    // if (optional_asteroid) |asteroid| try state.asteroids.add(asteroid.*, id);
+    // if (optional_fighter) |fighter| try state.fighters.add(fighter.*, id);
+
+    return id;
+}
+
+fn pump_entity_queues(state: *GameState) !void {
+    {
+        const start_time = get_time(null);
+        defer log_scope_time_on_overage("\tdelayed delete", start_time, 12.0);
+
+        for (state.delete_list.toSlice()) |entity| {
+            try state.movers.remove(entity);
+            try state.mover_types.remove(entity);
+            try state.asteroids.remove(entity);
+            try state.fighters.remove(entity);
+        }
+        try state.delete_list.resize(0);
+    }
+
+    for (state.new_entities.toSliceConst()) |desc| {
+        try state.entities.append(desc.id);
+        try state.mover_types.add(desc.mover_type, desc.id);
+        try state.movers.add(desc.mover, desc.id);
+
+        std.debug.warn("[entity] type: {}, velocity: {d:.2} {d:.2}\n", @tagName(desc.mover_type), desc.mover.velocity.x, desc.mover.velocity.y);
+
+        if (desc.optional_asteroid) |asteroid| try state.asteroids.add(asteroid, desc.id);
+        if (desc.optional_fighter) |fighter| try state.fighters.add(fighter, desc.id);
+    }
+    try state.new_entities.resize(0);
 }
 
 fn shoot_bullet(state: *GameState, from_mover: *const Mover, direction: Vector3) !void {
@@ -320,7 +463,7 @@ fn shoot_bullet(state: *GameState, from_mover: *const Mover, direction: Vector3)
         .scale = BULLET_SIZE,
     };
 
-    try add_object(state, MoverType.Bullet, &mover, null, null);
+    _ = try new_entity_delayed(state, MoverType.Bullet, &mover, null, null);
 }
 
 fn log_sdl_error() void {
@@ -329,7 +472,9 @@ fn log_sdl_error() void {
     std.debug.warn("Error in SDL: {}\n", err);
 }
 
-fn get_time(prev: Time) Time {
+fn get_time(optional_prev: ?Time) Time {
+    const prev = if (optional_prev) |time| time else Time{};
+
     var counter: u64 = sdl.SDL_GetPerformanceCounter();
     var frequency: u64 = sdl.SDL_GetPerformanceFrequency();
 
@@ -427,7 +572,9 @@ fn game_tick(state: *GameState, time: Time) !void {
     const forward = Vector3{ .x = 1, .y = 0, .z = 0 };
 
     const playerIndex = 0;
-    var player_mover = &state.movers.toSlice()[playerIndex];
+    var player_mover = try state.movers.get(state.player_entity_id);
+
+    // std.debug.warn("mover pos: {d:.2} {d:.2}\n", player_mover.pos.x, player_mover.pos.y);
 
     // debug camera or player steering
     if (state.debug_camera) {
@@ -454,6 +601,7 @@ fn game_tick(state: *GameState, time: Time) !void {
             const MAX_ACCELERATION = 0.5 * time.dt;
             const MAX_SPEED = 0.7;
 
+            std.debug.warn("moving??");
             player_mover.velocity = calc_velocity(player_mover.rot, player_mover.velocity, MAX_ACCELERATION, MAX_SPEED);
         }
 
@@ -487,17 +635,23 @@ fn game_tick(state: *GameState, time: Time) !void {
                 .Shooting = FighterStateShoot{},
             };
 
-            try add_object(state, MoverType.Fighter, &mover, null, &fighter);
+            _ = try new_entity_delayed(state, MoverType.Fighter, &mover, null, &fighter);
         }
 
         // AI tick for existing enemies
-        for (state.fighters.toSlice()) |*fighter, index| {
-            const MAX_TURN_SPEED = 5.0 * time.dt;
-            const MAX_SHOOT_RANGE = 200.0;
-            const MAX_ACCELERATION = 0.12 * time.dt;
-            const MAX_SPEED = 0.3;
+        for (state.fighters.toSlice()) |*ec| {
+            var fighter = &ec.component;
 
-            var mover = &state.movers.toSlice()[index];
+            // const MAX_TURN_SPEED = 5.0 * time.dt;
+            // const MAX_SHOOT_RANGE = 200.0;
+            // const MAX_ACCELERATION = 0.12 * time.dt;
+            // const MAX_SPEED = 0.3;
+            const MAX_TURN_SPEED = 9.0 * time.dt;
+            const MAX_SHOOT_RANGE = 200.0;
+            const MAX_ACCELERATION = 0.42 * time.dt;
+            const MAX_SPEED = 0.7;
+
+            var mover = try state.movers.get(ec.entity);
             const to_player_mover = player_mover.pos.sub(mover.pos);
             const to_player_length = to_player_mover.length();
             const to_player_mover_dir = to_player_mover.scale(1.0 / to_player_length);
@@ -577,17 +731,13 @@ fn game_tick(state: *GameState, time: Time) !void {
         }
     }
 
-    // std.debug.warn("camera pos: ({d:.2}, {d:.2})\n", state.camera.pos.x, state.camera.pos.y);
-    // std.debug.warn("player pos: ({d:.2}, {d:.2})\n", state.movers.at(0).pos.x, state.movers.at(0).pos.y);
-
     if (!state.debug_camera) {
-        for (state.mover_types.toSliceConst()) |mover_type, index| {
-            if (mover_type == MoverType.PlayerShip) {
-                state.camera.pos = state.movers.at(index).pos;
-                break;
-            }
-        }
+        // state.camera.pos = player_mover.pos;
     }
+
+    std.debug.warn("camera pos: ({d:.2}, {d:.2})\n", state.camera.pos.x, state.camera.pos.y);
+    std.debug.warn("player pos: ({d:.2}, {d:.2})\n", player_mover.pos.x, player_mover.pos.y);
+    std.debug.warn("player vel: ({d:.2}, {d:.2})\n", player_mover.velocity.x, player_mover.velocity.y);
 
     // std.debug.warn("{} {}\n", colliding_state.at(0), colliding_state.at(1));
     {
@@ -597,14 +747,17 @@ fn game_tick(state: *GameState, time: Time) !void {
         {
             const start_time = get_time(time);
             defer log_scope_time_on_overage("\tcollision_detection", start_time, 12.0);
-            for (state.movers.toSlice()) |*mover1, i| {
-                for (state.movers.toSlice()) |mover2, j| {
-                    if (i == j) {
+            for (state.movers.toSlice()) |*ec1, i| {
+                for (state.movers.toSlice()) |*ec2, k| {
+                    if (ec1.entity.id == ec2.entity.id) {
                         continue;
                     }
 
-                    const type1: u3 = @enumToInt(state.mover_types.at(i));
-                    const type2: u3 = @enumToInt(state.mover_types.at(j));
+                    const type1: u3 = @enumToInt((try state.mover_types.get(ec1.entity)).*);
+                    const type2: u3 = @enumToInt((try state.mover_types.get(ec2.entity)).*);
+
+                    const mover1 = ec1.component;
+                    const mover2 = ec2.component;
 
                     const collision_mask1 = COLLISION_MASKS[type1];
                     const collision_mask2 = COLLISION_MASKS[type2];
@@ -621,7 +774,7 @@ fn game_tick(state: *GameState, time: Time) !void {
                     }
 
                     if (collision_mask2 & collision_bit1 != 0) {
-                        colliding_state.set(j, colliding_state.at(j) or is_colliding);
+                        colliding_state.set(k, colliding_state.at(k) or is_colliding);
                     }
 
                     // if (is_colliding and i == 0) {
@@ -639,12 +792,14 @@ fn game_tick(state: *GameState, time: Time) !void {
         {
             const start_time = get_time(time);
             defer log_scope_time_on_overage("\tmover_update", start_time, 12.0);
-            for (state.movers.toSlice()) |*mover, index| {
+            for (state.movers.toSlice()) |*ec, index| {
+                var mover: *Mover = &ec.component;
+
                 mover.pos = mover.pos.add(mover.velocity);
                 mover.pos.x = @mod(mover.pos.x + state.world_bounds.x, state.world_bounds.x);
                 mover.pos.y = @mod(mover.pos.y + state.world_bounds.y, state.world_bounds.y);
 
-                const mover_type = state.mover_types.at(index);
+                const mover_type = (try state.mover_types.get(ec.entity)).*;
                 const is_colliding = colliding_state.at(index);
 
                 {
@@ -654,15 +809,16 @@ fn game_tick(state: *GameState, time: Time) !void {
                 }
 
                 if (is_colliding and mover_type == MoverType.Bullet) {
-                    try state.delete_list.append(index);
+                    try state.delete_list.append(ec.entity);
                 }
 
                 if (is_colliding and mover_type == MoverType.Asteroid) {
-                    var asteroid: *Asteroid = &state.asteroids.toSlice()[index];
+                    var asteroid: *Asteroid = try state.asteroids.get(ec.entity);
 
                     // scale this guy down
+                    std.debug.warn("{}\n", asteroid.scale_index);
                     if (asteroid.scale_index == 0) {
-                        try state.delete_list.append(index);
+                        try state.delete_list.append(ec.entity);
                     } else {
                         const old_speed = mover.velocity.length();
 
@@ -676,6 +832,7 @@ fn game_tick(state: *GameState, time: Time) !void {
                         const vel1 = forward.rotateZ(new_dir1).scale(new_speed1);
                         const vel2 = forward.rotateZ(new_dir2).scale(new_speed2);
 
+                        std.debug.warn("\t{}\n", asteroid.scale_index);
                         asteroid.scale_index = asteroid.scale_index - 1;
 
                         mover.scale = ASTEROID_SCALES[asteroid.scale_index];
@@ -688,7 +845,7 @@ fn game_tick(state: *GameState, time: Time) !void {
                         mover.pos = mover.pos.add(mover.velocity.scale(100.0));
                         mover_clone.pos = mover_clone.pos.add(mover_clone.velocity.scale(100.0));
 
-                        try add_object(state, MoverType.Asteroid, &mover_clone, asteroid, null);
+                        _ = try new_entity_delayed(state, MoverType.Asteroid, &mover_clone, asteroid, null);
                     }
                 }
             }
@@ -702,20 +859,8 @@ fn game_tick(state: *GameState, time: Time) !void {
         sdl.SDL_RenderPresent(state.renderer);
     }
 
-    // delayed delete in reverse index order
-    {
-        const start_time = get_time(time);
-        defer log_scope_time_on_overage("\tdelayed delete", start_time, 12.0);
-        std.sort.sort(usize, state.delete_list.toSlice(), delete_list_sorter);
-
-        for (state.delete_list.toSlice()) |index| {
-            _ = state.movers.swapRemove(index);
-            _ = state.mover_types.swapRemove(index);
-            _ = state.asteroids.swapRemove(index);
-            _ = state.fighters.swapRemove(index);
-        }
-        try state.delete_list.resize(0);
-    }
+    // update these after all deletes and new entities have been submitted
+    try pump_entity_queues(state);
 }
 
 // =======================================================
