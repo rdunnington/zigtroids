@@ -1,0 +1,14 @@
+Engine:
+* Use hashmaps of entity id to components? or maybe a flat array of all components with a quick hashmap reverse-lookup index?
+
+Weapons:
+* 
+
+
+Infinite world:
+* assign sector (x,y) to mover
+* move pos to sector_pos
+* sector_pos updates
+* helper func to calculate global pos
+* remove(?) or save off objects outside more than +/- 2 sectors away
+
