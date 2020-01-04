@@ -135,7 +135,7 @@ fn MakeSystem(comptime ComponentType: type) type {
 
         pub fn get(system: *Self, entity: EntityId) !*ComponentType {
             var index = system.entity_lookup.getValue(entity) orelse return error.NOT_FOUND;
-            return &system.components.at(index).component;
+            return &system.components.ptrAt(index).component;
         }
 
         pub fn getNullable(system: *Self, entity: EntityId) ?*ComponentType {
@@ -588,7 +588,7 @@ fn game_tick(state: *GameState, time: Time) !void {
             const MAX_ACCELERATION = 0.5 * time.dt;
             const MAX_SPEED = 0.7;
 
-            std.debug.warn("moving??", .{});
+            std.debug.warn("moving??\n", .{});
             player_mover.velocity = calc_velocity(player_mover.rot, player_mover.velocity, MAX_ACCELERATION, MAX_SPEED);
         }
 
