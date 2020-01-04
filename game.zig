@@ -129,17 +129,17 @@ fn MakeSystem(comptime ComponentType: type) type {
         }
 
         pub fn remove(system: *Self, entity: EntityId) !void {
-            var removed = system.entity_lookup.remove(entity) orelse unreachable;
+            var removed = system.entity_lookup.remove(entity) orelse return error.NOT_FOUND;
             _ = try system.components.swapRemoveOrError(removed.value);
+        }
+
+        pub fn remove_safe(system: *Self, entity: EntityId) void {
+            system.remove(entity) catch {};
         }
 
         pub fn get(system: *Self, entity: EntityId) !*ComponentType {
             var index = system.entity_lookup.getValue(entity) orelse return error.NOT_FOUND;
             return &system.components.ptrAt(index).component;
-        }
-
-        pub fn getNullable(system: *Self, entity: EntityId) ?*ComponentType {
-            return try system.get(entity) catch |err| return null;
         }
 
         pub fn toSlice(system: *Self) []EC {
@@ -413,10 +413,10 @@ fn pump_entity_queues(state: *GameState) !void {
         defer log_scope_time_on_overage("\tdelayed delete", start_time, 12.0);
 
         for (state.delete_list.toSlice()) |entity| {
-            try state.movers.remove(entity);
-            try state.mover_types.remove(entity);
-            try state.asteroids.remove(entity);
-            try state.fighters.remove(entity);
+            state.movers.remove_safe(entity);
+            state.mover_types.remove_safe(entity);
+            state.asteroids.remove_safe(entity);
+            state.fighters.remove_safe(entity);
         }
         try state.delete_list.resize(0);
     }
