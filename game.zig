@@ -156,11 +156,6 @@ fn MakeSystem(comptime ComponentType: type) type {
     };
 }
 
-// const MoverList = std.ArrayList(Mover);
-// const MoverTypeList = std.ArrayList(MoverType);
-// const AsteroidList = std.ArrayList(Asteroid);
-// const FighterList = std.ArrayList(Fighter);
-
 const MoverSystem = MakeSystem(Mover);
 const MoverTypeSystem = MakeSystem(MoverType);
 const AsteroidSystem = MakeSystem(Asteroid);
@@ -185,10 +180,6 @@ const GameState = struct {
     stars: PositionList,
     input: InputState,
 
-    // mover_types: MoverTypeList,
-    // movers: MoverList,
-    // asteroids: AsteroidList,
-    // fighters: FighterList,
     entities: EntityList,
     mover_types: MoverTypeSystem,
     movers: MoverSystem,
@@ -375,7 +366,6 @@ pub fn main() !u8 {
                 const value: bool = if (event.key.type == sdl.SDL_KEYDOWN) true else false;
                 if (event.key.keysym.sym == sdl.SDLK_LEFT) {
                     gamestate.input.left = value;
-                    std.debug.warn("left\n", .{});
                 } else if (event.key.keysym.sym == sdl.SDLK_RIGHT) {
                     gamestate.input.right = value;
                 } else if (event.key.keysym.sym == sdl.SDLK_UP) {
@@ -414,12 +404,6 @@ fn new_entity_delayed(state: *GameState, mover_type: MoverType, mover: *const Mo
 
     try state.new_entities.append(desc);
 
-    // try state.entities.append(id);
-    // try state.mover_types.add(mover_type, id);
-    // try state.movers.add(mover.*, id);
-    // if (optional_asteroid) |asteroid| try state.asteroids.add(asteroid.*, id);
-    // if (optional_fighter) |fighter| try state.fighters.add(fighter.*, id);
-
     return id;
 }
 
@@ -442,7 +426,13 @@ fn pump_entity_queues(state: *GameState) !void {
         try state.mover_types.add(desc.mover_type, desc.id);
         try state.movers.add(desc.mover, desc.id);
 
-        std.debug.warn("[entity] type: {}, velocity: {d:.2} {d:.2}\n", .{ @tagName(desc.mover_type), desc.mover.velocity.x, desc.mover.velocity.y });
+        std.debug.warn("[entity]\n\ttype: {}\n\tpos: {d:.2} {d:.2}\n\tvelocity: {d:.2} {d:.2}\n", .{
+            @tagName(desc.mover_type),
+            desc.mover.pos.x,
+            desc.mover.pos.y,
+            desc.mover.velocity.x,
+            desc.mover.velocity.y,
+        });
 
         if (desc.optional_asteroid) |asteroid| try state.asteroids.add(asteroid, desc.id);
         if (desc.optional_fighter) |fighter| try state.fighters.add(fighter, desc.id);
@@ -572,17 +562,6 @@ fn game_tick(state: *GameState, time: Time) !void {
 
     const forward = Vector3{ .x = 1, .y = 0, .z = 0 };
 
-    // var player_mover: *Mover = try state.movers.get(state.player_entity_id);
-
-    // std.debug.warn("=====================", .{});
-    // std.debug.warn("camera pos: ({d:.2}, .{d:.2})\n", .{ state.camera.pos.x, state.camera.pos.y });
-    // std.debug.warn("player pos: ({d:.2}, .{d:.2})\n", .{ player_mover.pos.x, player_mover.pos.y });
-    // std.debug.warn("player vel: ({d:.2}, .{d:.2})\n", .{ player_mover.velocity.x, player_mover.velocity.y });
-
-    // std.debug.warn("player mover: {}\n", .{&player_mover.velocity});
-
-    // std.debug.warn("mover pos: {d:.2} {d:.2}\n", player_mover.pos.x, player_mover.pos.y);
-
     // debug camera or player steering
     if (state.debug_camera) {
         var x: f32 = 0.0;
@@ -624,13 +603,6 @@ fn game_tick(state: *GameState, time: Time) !void {
     // Enemies
     {
         var player_mover: *Mover = try state.movers.get(state.player_entity_id);
-
-        std.debug.warn("=====================", .{});
-        std.debug.warn("camera pos: ({d:.2}, .{d:.2})\n", .{ state.camera.pos.x, state.camera.pos.y });
-        std.debug.warn("player pos: ({d:.2}, .{d:.2})\n", .{ player_mover.pos.x, player_mover.pos.y });
-        std.debug.warn("player vel: ({d:.2}, .{d:.2})\n", .{ player_mover.velocity.x, player_mover.velocity.y });
-
-        std.debug.warn("player mover: {}\n", .{&player_mover.velocity});
 
         // const start_time = get_time(time);
         // defer log_scope_time_on_overage("\tenemy_logic", start_time, 12.0);
@@ -751,19 +723,11 @@ fn game_tick(state: *GameState, time: Time) !void {
         }
     }
 
-    // if (!state.debug_camera) {
-    //     // state.camera.pos = player_mover.pos;
-    // }
+    if (!state.debug_camera) {
+        var player_mover: *Mover = try state.movers.get(state.player_entity_id);
+        state.camera.pos = player_mover.pos;
+    }
 
-    var player_mover: *Mover = try state.movers.get(state.player_entity_id);
-
-    std.debug.warn("camera pos: ({d:.2}, .{d:.2})\n", .{ state.camera.pos.x, state.camera.pos.y });
-    std.debug.warn("player pos: ({d:.2}, .{d:.2})\n", .{ player_mover.pos.x, player_mover.pos.y });
-    std.debug.warn("player vel: ({d:.2}, .{d:.2})\n", .{ player_mover.velocity.x, player_mover.velocity.y });
-
-    std.debug.warn("player mover: {}\n", .{&player_mover.velocity});
-
-    // std.debug.warn("{} {}\n", colliding_state.at(0), colliding_state.at(1));
     {
         var colliding_state = std.ArrayList(bool).init(std.heap.c_allocator);
         try colliding_state.resize(state.movers.count());
@@ -800,15 +764,6 @@ fn game_tick(state: *GameState, time: Time) !void {
                     if (collision_mask2 & collision_bit1 != 0) {
                         colliding_state.set(k, colliding_state.at(k) or is_colliding);
                     }
-
-                    // if (is_colliding and i == 0) {
-                    //     var length = mover1.velocity.length();
-                    //     var bounceDir = mover1.velocity.normalize();
-                    //     var bounceVel = bounceDir.scale(-length * 0.8);
-                    //     std.debug.warn("{} {}\n", bounceVel.x, bounceVel.y);
-                    //     mover1.velocity = bounceVel;
-                    //     mover1.pos = mover1.pos.add(bounceDir.scale(-std.math.sqrt(distanceSq)));
-                    // }
                 }
             }
         }
