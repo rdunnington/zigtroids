@@ -124,7 +124,7 @@ fn MakeSystem(comptime ComponentType: type) type {
                 .component = component,
                 .entity = entity,
             };
-            try system.entity_lookup.putNoClobber(entity, system.components.count());
+            try system.entity_lookup.putNoClobber(entity, system.components.len);
             try system.components.append(ec);
         }
 
@@ -151,7 +151,7 @@ fn MakeSystem(comptime ComponentType: type) type {
         }
 
         pub fn count(system: *Self) usize {
-            return system.components.count();
+            return system.components.len;
         }
     };
 }
@@ -250,13 +250,13 @@ fn get_window_size(window: *sdl.SDL_Window) Vector2 {
 
 pub fn main() !u8 {
     if (sdl.SDL_Init(sdl.SDL_INIT_VIDEO | sdl.SDL_INIT_AUDIO) != 0) {
-        std.debug.panic("sdl.SDL_Init failed: {c}\n", sdl.SDL_GetError());
+        std.debug.panic("sdl.SDL_Init failed: {c}\n", .{sdl.SDL_GetError()});
     }
     defer sdl.SDL_Quit();
 
     // TODO sdl.SDL_WINDOW_RESIZABLE - game exits with error code when we resize??
     var window: *sdl.SDL_Window = sdl.SDL_CreateWindow(
-        c"Zigtroids",
+        "Zigtroids",
         200,
         200,
         @intCast(c_int, 640),
@@ -375,6 +375,7 @@ pub fn main() !u8 {
                 const value: bool = if (event.key.type == sdl.SDL_KEYDOWN) true else false;
                 if (event.key.keysym.sym == sdl.SDLK_LEFT) {
                     gamestate.input.left = value;
+                    std.debug.warn("left\n", .{});
                 } else if (event.key.keysym.sym == sdl.SDLK_RIGHT) {
                     gamestate.input.right = value;
                 } else if (event.key.keysym.sym == sdl.SDLK_UP) {
@@ -441,7 +442,7 @@ fn pump_entity_queues(state: *GameState) !void {
         try state.mover_types.add(desc.mover_type, desc.id);
         try state.movers.add(desc.mover, desc.id);
 
-        std.debug.warn("[entity] type: {}, velocity: {d:.2} {d:.2}\n", @tagName(desc.mover_type), desc.mover.velocity.x, desc.mover.velocity.y);
+        std.debug.warn("[entity] type: {}, velocity: {d:.2} {d:.2}\n", .{ @tagName(desc.mover_type), desc.mover.velocity.x, desc.mover.velocity.y });
 
         if (desc.optional_asteroid) |asteroid| try state.asteroids.add(asteroid, desc.id);
         if (desc.optional_fighter) |fighter| try state.fighters.add(fighter, desc.id);
@@ -469,7 +470,7 @@ fn shoot_bullet(state: *GameState, from_mover: *const Mover, direction: Vector3)
 fn log_sdl_error() void {
     var c_err = sdl.SDL_GetError() orelse return;
     var err = std.mem.toSliceConst(u8, c_err);
-    std.debug.warn("Error in SDL: {}\n", err);
+    std.debug.warn("Error in SDL: {}\n", .{err});
 }
 
 fn get_time(optional_prev: ?Time) Time {
@@ -488,13 +489,13 @@ fn get_time(optional_prev: ?Time) Time {
 
 fn log_scope_time(name: []const u8, prev_time: Time) void {
     const now = get_time(prev_time);
-    std.debug.warn("{}: {d:.2}ms\n", name, now.dt * 1000.0);
+    std.debug.warn("{}: {d:.2}ms\n", .{ name, now.dt * 1000.0 });
 }
 
 fn log_scope_time_on_overage(name: []const u8, prev_time: Time, overage_threshold_ms: f32) void {
     const now = get_time(prev_time);
     if (now.dt * 1000.0 > overage_threshold_ms) {
-        std.debug.warn("{}: {d:.2}ms\n", name, now.dt * 1000.0);
+        std.debug.warn("{}: {d:.2}ms\n", .{ name, now.dt * 1000.0 });
     }
 }
 
@@ -539,112 +540,124 @@ fn game_tick(state: *GameState, time: Time) !void {
     //     }
     // }
 
-    // {
-    //     const start_time = get_time(time);
-    //     defer log_scope_time_on_overage("\tdraw_stars", start_time, 12.0);
-    //     draw_stars(draw_info, state.stars.toSliceConst());
-    // }
+    {
+        const start_time = get_time(time);
+        defer log_scope_time_on_overage("\tdraw_stars", start_time, 12.0);
+        draw_stars(draw_info, state.stars.toSliceConst());
+    }
 
-    // // draw world border
-    // {
-    //     const border_points = [_]Vector3{
-    //         Vector3{ .x = 0, .y = 0 },
-    //         Vector3{
-    //             .x = state.world_bounds.x,
-    //             .y = 0,
-    //         },
-    //         Vector3{
-    //             .x = state.world_bounds.x,
-    //             .y = state.world_bounds.y,
-    //         },
-    //         Vector3{
-    //             .x = 0,
-    //             .y = state.world_bounds.y,
-    //         },
-    //         Vector3{ .x = 0, .y = 0 },
-    //     };
+    // draw world border
+    {
+        const border_points = &[_]Vector3{
+            Vector3{ .x = 0, .y = 0 },
+            Vector3{
+                .x = state.world_bounds.x,
+                .y = 0,
+            },
+            Vector3{
+                .x = state.world_bounds.x,
+                .y = state.world_bounds.y,
+            },
+            Vector3{
+                .x = 0,
+                .y = state.world_bounds.y,
+            },
+            Vector3{ .x = 0, .y = 0 },
+        };
 
-    //     var points = transform_points_with_positions(draw_info, border_points);
-    //     draw_line_strip(draw_info, COLOR_GREEN, points.toSlice());
-    //     points.deinit();
-    // }
+        var points = transform_points_with_positions(draw_info, border_points);
+        draw_line_strip(draw_info, COLOR_GREEN, points.toSlice());
+        points.deinit();
+    }
 
     const forward = Vector3{ .x = 1, .y = 0, .z = 0 };
 
-    const playerIndex = 0;
-    var player_mover = try state.movers.get(state.player_entity_id);
+    // var player_mover: *Mover = try state.movers.get(state.player_entity_id);
 
-    std.debug.warn("camera pos: ({d:.2}, {d:.2})\n", state.camera.pos.x, state.camera.pos.y);
-    std.debug.warn("player pos: ({d:.2}, {d:.2})\n", player_mover.pos.x, player_mover.pos.y);
-    std.debug.warn("player vel: ({d:.2}, {d:.2})\n", player_mover.velocity.x, player_mover.velocity.y);
+    // std.debug.warn("=====================", .{});
+    // std.debug.warn("camera pos: ({d:.2}, .{d:.2})\n", .{ state.camera.pos.x, state.camera.pos.y });
+    // std.debug.warn("player pos: ({d:.2}, .{d:.2})\n", .{ player_mover.pos.x, player_mover.pos.y });
+    // std.debug.warn("player vel: ({d:.2}, .{d:.2})\n", .{ player_mover.velocity.x, player_mover.velocity.y });
+
+    // std.debug.warn("player mover: {}\n", .{&player_mover.velocity});
 
     // std.debug.warn("mover pos: {d:.2} {d:.2}\n", player_mover.pos.x, player_mover.pos.y);
 
     // debug camera or player steering
-    // if (state.debug_camera) {
-    //     var x: f32 = 0.0;
-    //     var y: f32 = 0.0;
+    if (state.debug_camera) {
+        var x: f32 = 0.0;
+        var y: f32 = 0.0;
 
-    //     var step: f32 = 700.0 * time.dt;
+        var step: f32 = 700.0 * time.dt;
 
-    //     x += if (state.input.right) step else 0.0;
-    //     x += if (state.input.left) -step else 0.0;
-    //     y += if (state.input.back) step else 0.0;
-    //     y += if (state.input.forward) -step else 0.0;
+        x += if (state.input.right) step else 0.0;
+        x += if (state.input.left) -step else 0.0;
+        y += if (state.input.back) step else 0.0;
+        y += if (state.input.forward) -step else 0.0;
 
-    //     state.camera.pos = state.camera.pos.add(Vector3{ .x = x, .y = y });
-    // } else {
-    //     var rot: f32 = 0.0;
-    //     rot += if (state.input.left) @as(f32, 5.0) else 0.0;
-    //     rot -= if (state.input.right) @as(f32, 5.0) else 0.0;
+        state.camera.pos = state.camera.pos.add(Vector3{ .x = x, .y = y });
+    } else {
+        var rot: f32 = 0.0;
+        rot += if (state.input.left) @as(f32, 5.0) else 0.0;
+        rot -= if (state.input.right) @as(f32, 5.0) else 0.0;
 
-    //     const period = std.math.pi * 2.0;
-    //     player_mover.rot = @mod(player_mover.rot + rot * time.dt + period, period);
+        const period = std.math.pi * 2.0;
+        var player_mover: *Mover = try state.movers.get(state.player_entity_id);
+        player_mover.rot = @mod(player_mover.rot + rot * time.dt + period, period);
 
-    //     if (state.input.forward and !state.input.left and !state.input.right) {
-    //         const MAX_ACCELERATION = 0.5 * time.dt;
-    //         const MAX_SPEED = 0.7;
+        if (state.input.forward and !state.input.left and !state.input.right) {
+            const MAX_ACCELERATION = 0.5 * time.dt;
+            const MAX_SPEED = 0.7;
 
-    //         std.debug.warn("moving??");
-    //         player_mover.velocity = calc_velocity(player_mover.rot, player_mover.velocity, MAX_ACCELERATION, MAX_SPEED);
-    //     }
+            std.debug.warn("moving??", .{});
+            player_mover.velocity = calc_velocity(player_mover.rot, player_mover.velocity, MAX_ACCELERATION, MAX_SPEED);
+        }
 
-    //     if (state.input.shoot) {
-    //         state.input.shoot = false;
+        if (state.input.shoot) {
+            state.input.shoot = false;
 
-    //         const player_dir = forward.rotateZ(player_mover.rot).normalize();
-    //         try shoot_bullet(state, player_mover, player_dir);
-    //     }
-    // }
+            const player_dir = forward.rotateZ(player_mover.rot).normalize();
+            try shoot_bullet(state, player_mover, player_dir);
+        }
+    }
 
     // Enemies
     {
+        var player_mover: *Mover = try state.movers.get(state.player_entity_id);
+
+        std.debug.warn("=====================", .{});
+        std.debug.warn("camera pos: ({d:.2}, .{d:.2})\n", .{ state.camera.pos.x, state.camera.pos.y });
+        std.debug.warn("player pos: ({d:.2}, .{d:.2})\n", .{ player_mover.pos.x, player_mover.pos.y });
+        std.debug.warn("player vel: ({d:.2}, .{d:.2})\n", .{ player_mover.velocity.x, player_mover.velocity.y });
+
+        std.debug.warn("player mover: {}\n", .{&player_mover.velocity});
+
         // const start_time = get_time(time);
         // defer log_scope_time_on_overage("\tenemy_logic", start_time, 12.0);
 
         // spawn new enemies
         const ENEMY_SPAWN_COOLDOWN = 10.0;
 
-        // if (time.total_elapsed - state.enemy_spawner.last_spawn_time >= ENEMY_SPAWN_COOLDOWN) {
-        //     state.enemy_spawner.last_spawn_time = time.total_elapsed;
+        if (time.total_elapsed - state.enemy_spawner.last_spawn_time >= ENEMY_SPAWN_COOLDOWN) {
+            state.enemy_spawner.last_spawn_time = time.total_elapsed;
 
-        //     var x: f32 = 100.0;
-        //     var y: f32 = 100.0;
+            var x: f32 = 100.0;
+            var y: f32 = 100.0;
 
-        //     const mover = Mover{
-        //         .pos = Vector3{ .x = x, .y = y },
-        //         .scale = 10,
-        //     };
-        //     const fighter = Fighter{
-        //         .Shooting = FighterStateShoot{},
-        //     };
+            const mover = Mover{
+                .pos = Vector3{ .x = x, .y = y },
+                .scale = 10,
+            };
+            const fighter = Fighter{
+                .Shooting = FighterStateShoot{},
+            };
 
-        //     _ = try new_entity_delayed(state, MoverType.Fighter, &mover, null, &fighter);
-        // }
+            _ = try new_entity_delayed(state, MoverType.Fighter, &mover, null, &fighter);
+        }
 
         // AI tick for existing enemies
         for (state.fighters.toSlice()) |*ec| {
-            var fighter = &ec.component;
+            // var fighter = &ec.component;
 
             // const MAX_TURN_SPEED = 5.0 * time.dt;
             // const MAX_SHOOT_RANGE = 200.0;
@@ -742,123 +755,127 @@ fn game_tick(state: *GameState, time: Time) !void {
     //     // state.camera.pos = player_mover.pos;
     // }
 
-    std.debug.warn("camera pos: ({d:.2}, {d:.2})\n", state.camera.pos.x, state.camera.pos.y);
-    std.debug.warn("player pos: ({d:.2}, {d:.2})\n", player_mover.pos.x, player_mover.pos.y);
-    std.debug.warn("player vel: ({d:.2}, {d:.2})\n", player_mover.velocity.x, player_mover.velocity.y);
+    var player_mover: *Mover = try state.movers.get(state.player_entity_id);
 
-    // // std.debug.warn("{} {}\n", colliding_state.at(0), colliding_state.at(1));
-    // {
-    //     var colliding_state = std.ArrayList(bool).init(std.heap.c_allocator);
-    //     try colliding_state.resize(state.movers.count());
+    std.debug.warn("camera pos: ({d:.2}, .{d:.2})\n", .{ state.camera.pos.x, state.camera.pos.y });
+    std.debug.warn("player pos: ({d:.2}, .{d:.2})\n", .{ player_mover.pos.x, player_mover.pos.y });
+    std.debug.warn("player vel: ({d:.2}, .{d:.2})\n", .{ player_mover.velocity.x, player_mover.velocity.y });
 
-    //     {
-    //         const start_time = get_time(time);
-    //         defer log_scope_time_on_overage("\tcollision_detection", start_time, 12.0);
-    //         for (state.movers.toSlice()) |*ec1, i| {
-    //             for (state.movers.toSlice()) |*ec2, k| {
-    //                 if (ec1.entity.id == ec2.entity.id) {
-    //                     continue;
-    //                 }
+    std.debug.warn("player mover: {}\n", .{&player_mover.velocity});
 
-    //                 const type1: u3 = @enumToInt((try state.mover_types.get(ec1.entity)).*);
-    //                 const type2: u3 = @enumToInt((try state.mover_types.get(ec2.entity)).*);
+    // std.debug.warn("{} {}\n", colliding_state.at(0), colliding_state.at(1));
+    {
+        var colliding_state = std.ArrayList(bool).init(std.heap.c_allocator);
+        try colliding_state.resize(state.movers.count());
 
-    //                 const mover1 = ec1.component;
-    //                 const mover2 = ec2.component;
+        {
+            const start_time = get_time(time);
+            defer log_scope_time_on_overage("\tcollision_detection", start_time, 12.0);
+            for (state.movers.toSlice()) |*ec1, i| {
+                for (state.movers.toSlice()) |*ec2, k| {
+                    if (ec1.entity.id == ec2.entity.id) {
+                        continue;
+                    }
 
-    //                 const collision_mask1 = COLLISION_MASKS[type1];
-    //                 const collision_mask2 = COLLISION_MASKS[type2];
+                    const type1: u3 = @enumToInt((try state.mover_types.get(ec1.entity)).*);
+                    const type2: u3 = @enumToInt((try state.mover_types.get(ec2.entity)).*);
 
-    //                 const collision_bit1: u32 = @shlExact(@as(u8, 1), type1);
-    //                 const collision_bit2: u32 = @shlExact(@as(u8, 1), type2);
+                    const mover1 = ec1.component;
+                    const mover2 = ec2.component;
 
-    //                 var collisionLength = mover1.scale * 0.95 + mover2.scale * 0.95;
-    //                 var distanceSq = mover1.pos.sub(mover2.pos).lengthSq();
-    //                 var is_colliding = distanceSq <= collisionLength * collisionLength;
+                    const collision_mask1 = COLLISION_MASKS[type1];
+                    const collision_mask2 = COLLISION_MASKS[type2];
 
-    //                 if (collision_mask1 & collision_bit2 != 0) {
-    //                     colliding_state.set(i, colliding_state.at(i) or is_colliding);
-    //                 }
+                    const collision_bit1: u32 = @shlExact(@as(u8, 1), type1);
+                    const collision_bit2: u32 = @shlExact(@as(u8, 1), type2);
 
-    //                 if (collision_mask2 & collision_bit1 != 0) {
-    //                     colliding_state.set(k, colliding_state.at(k) or is_colliding);
-    //                 }
+                    var collisionLength = mover1.scale * 0.95 + mover2.scale * 0.95;
+                    var distanceSq = mover1.pos.sub(mover2.pos).lengthSq();
+                    var is_colliding = distanceSq <= collisionLength * collisionLength;
 
-    //                 // if (is_colliding and i == 0) {
-    //                 //     var length = mover1.velocity.length();
-    //                 //     var bounceDir = mover1.velocity.normalize();
-    //                 //     var bounceVel = bounceDir.scale(-length * 0.8);
-    //                 //     std.debug.warn("{} {}\n", bounceVel.x, bounceVel.y);
-    //                 //     mover1.velocity = bounceVel;
-    //                 //     mover1.pos = mover1.pos.add(bounceDir.scale(-std.math.sqrt(distanceSq)));
-    //                 // }
-    //             }
-    //         }
-    //     }
+                    if (collision_mask1 & collision_bit2 != 0) {
+                        colliding_state.set(i, colliding_state.at(i) or is_colliding);
+                    }
 
-    //     {
-    //         const start_time = get_time(time);
-    //         defer log_scope_time_on_overage("\tmover_update", start_time, 12.0);
-    //         for (state.movers.toSlice()) |*ec, index| {
-    //             var mover: *Mover = &ec.component;
+                    if (collision_mask2 & collision_bit1 != 0) {
+                        colliding_state.set(k, colliding_state.at(k) or is_colliding);
+                    }
 
-    //             mover.pos = mover.pos.add(mover.velocity);
-    //             mover.pos.x = @mod(mover.pos.x + state.world_bounds.x, state.world_bounds.x);
-    //             mover.pos.y = @mod(mover.pos.y + state.world_bounds.y, state.world_bounds.y);
+                    // if (is_colliding and i == 0) {
+                    //     var length = mover1.velocity.length();
+                    //     var bounceDir = mover1.velocity.normalize();
+                    //     var bounceVel = bounceDir.scale(-length * 0.8);
+                    //     std.debug.warn("{} {}\n", bounceVel.x, bounceVel.y);
+                    //     mover1.velocity = bounceVel;
+                    //     mover1.pos = mover1.pos.add(bounceDir.scale(-std.math.sqrt(distanceSq)));
+                    // }
+                }
+            }
+        }
 
-    //             const mover_type = (try state.mover_types.get(ec.entity)).*;
-    //             const is_colliding = colliding_state.at(index);
+        {
+            const start_time = get_time(time);
+            defer log_scope_time_on_overage("\tmover_update", start_time, 12.0);
+            for (state.movers.toSlice()) |*ec, index| {
+                var mover: *Mover = &ec.component;
 
-    //             {
-    //                 const start_time2 = get_time(time);
-    //                 defer log_scope_time_on_overage("\t\tdraw_object", start_time2, 12.0);
-    //                 draw_object(draw_info, mover, mover_type, is_colliding);
-    //             }
+                mover.pos = mover.pos.add(mover.velocity);
+                mover.pos.x = @mod(mover.pos.x + state.world_bounds.x, state.world_bounds.x);
+                mover.pos.y = @mod(mover.pos.y + state.world_bounds.y, state.world_bounds.y);
 
-    //             if (is_colliding and mover_type == MoverType.Bullet) {
-    //                 try state.delete_list.append(ec.entity);
-    //             }
+                const mover_type = (try state.mover_types.get(ec.entity)).*;
+                const is_colliding = colliding_state.at(index);
 
-    //             if (is_colliding and mover_type == MoverType.Asteroid) {
-    //                 var asteroid: *Asteroid = try state.asteroids.get(ec.entity);
+                {
+                    const start_time2 = get_time(time);
+                    defer log_scope_time_on_overage("\t\tdraw_object", start_time2, 12.0);
+                    draw_object(draw_info, mover, mover_type, is_colliding);
+                }
 
-    //                 // scale this guy down
-    //                 std.debug.warn("{}\n", asteroid.scale_index);
-    //                 if (asteroid.scale_index == 0) {
-    //                     try state.delete_list.append(ec.entity);
-    //                 } else {
-    //                     const old_speed = mover.velocity.length();
+                if (is_colliding and mover_type == MoverType.Bullet) {
+                    try state.delete_list.append(ec.entity);
+                }
 
-    //                     // 10-25% speed increase
-    //                     const new_speed1 = old_speed * (1.1 + state.rng.random.float(f32) * 0.15);
-    //                     const new_speed2 = old_speed * (1.1 + state.rng.random.float(f32) * 0.15);
+                if (is_colliding and mover_type == MoverType.Asteroid) {
+                    var asteroid: *Asteroid = try state.asteroids.get(ec.entity);
 
-    //                     const new_dir1 = state.rng.random.float(f32) * std.math.pi * 2.0;
-    //                     const new_dir2 = state.rng.random.float(f32) * std.math.pi * 2.0;
+                    // scale this guy down
+                    std.debug.warn("{}\n", .{asteroid.scale_index});
+                    if (asteroid.scale_index == 0) {
+                        try state.delete_list.append(ec.entity);
+                    } else {
+                        const old_speed = mover.velocity.length();
 
-    //                     const vel1 = forward.rotateZ(new_dir1).scale(new_speed1);
-    //                     const vel2 = forward.rotateZ(new_dir2).scale(new_speed2);
+                        // 10-25% speed increase
+                        const new_speed1 = old_speed * (1.1 + state.rng.random.float(f32) * 0.15);
+                        const new_speed2 = old_speed * (1.1 + state.rng.random.float(f32) * 0.15);
 
-    //                     std.debug.warn("\t{}\n", asteroid.scale_index);
-    //                     asteroid.scale_index = asteroid.scale_index - 1;
+                        const new_dir1 = state.rng.random.float(f32) * std.math.pi * 2.0;
+                        const new_dir2 = state.rng.random.float(f32) * std.math.pi * 2.0;
 
-    //                     mover.scale = ASTEROID_SCALES[asteroid.scale_index];
-    //                     mover.velocity = vel1;
+                        const vel1 = forward.rotateZ(new_dir1).scale(new_speed1);
+                        const vel2 = forward.rotateZ(new_dir2).scale(new_speed2);
 
-    //                     var mover_clone: Mover = mover.*;
-    //                     mover_clone.velocity = vel2;
+                        std.debug.warn("\t{}\n", .{asteroid.scale_index});
+                        asteroid.scale_index = asteroid.scale_index - 1;
 
-    //                     // offset positions so they look like individual asteroids
-    //                     mover.pos = mover.pos.add(mover.velocity.scale(100.0));
-    //                     mover_clone.pos = mover_clone.pos.add(mover_clone.velocity.scale(100.0));
+                        mover.scale = ASTEROID_SCALES[asteroid.scale_index];
+                        mover.velocity = vel1;
 
-    //                     _ = try new_entity_delayed(state, MoverType.Asteroid, &mover_clone, asteroid, null);
-    //                 }
-    //             }
-    //         }
-    //     }
-    //     colliding_state.deinit();
-    // }
+                        var mover_clone: Mover = mover.*;
+                        mover_clone.velocity = vel2;
+
+                        // offset positions so they look like individual asteroids
+                        mover.pos = mover.pos.add(mover.velocity.scale(100.0));
+                        mover_clone.pos = mover_clone.pos.add(mover_clone.velocity.scale(100.0));
+
+                        _ = try new_entity_delayed(state, MoverType.Asteroid, &mover_clone, asteroid, null);
+                    }
+                }
+            }
+        }
+        colliding_state.deinit();
+    }
 
     {
         const start_time = get_time(time);
@@ -911,7 +928,7 @@ fn vector3_to_sdl(v: Vector3) sdl.SDL_Point {
     };
 }
 
-const SHIP_POINTS = [_]Vector3{
+const SHIP_POINTS = &[_]Vector3{
     Vector3{ .x = 1, .y = 0.0, .z = 0.0 },
     Vector3{ .x = -0.7, .y = -1, .z = 0.0 },
     Vector3{ .x = 0.0, .y = 0.0, .z = 0.0 },
@@ -919,7 +936,7 @@ const SHIP_POINTS = [_]Vector3{
     Vector3{ .x = 1, .y = 0.0, .z = 0.0 },
 };
 
-const ASTEROID_POINTS = [_]Vector3{
+const ASTEROID_POINTS = &[_]Vector3{
     Vector3{ .x = 0.0, .y = 0.8, .z = 0.0 },
     Vector3{ .x = 0.8, .y = 0.4, .z = 0.0 },
     Vector3{ .x = 0.6, .y = -0.2, .z = 0.0 },
@@ -931,7 +948,7 @@ const ASTEROID_POINTS = [_]Vector3{
     Vector3{ .x = 0.0, .y = 0.8, .z = 0.0 },
 };
 
-const BULLET_POINTS = [_]Vector3{
+const BULLET_POINTS = &[_]Vector3{
     Vector3{ .x = 1.0, .y = -1.0 },
     Vector3{ .x = 1.0, .y = 1.0 },
     Vector3{ .x = -1.0, .y = 1.0 },
@@ -943,7 +960,7 @@ const CIRCLE_POINTS = generate_circle();
 
 const SdlPointsList = std.ArrayList(sdl.SDL_Point);
 
-fn generate_circle() [32]Vector3 {
+fn generate_circle() []Vector3 {
     var points: [32]Vector3 = undefined;
     for (points) |*point, i| {
         var rads = std.math.pi * 2.0 * (@intToFloat(f32, i) / @intToFloat(f32, points.len - 1));
@@ -963,7 +980,7 @@ fn draw_bounding_circle(draw_info: DrawInfo, mover: *const Mover, is_colliding: 
 }
 
 fn draw_object(draw_info: DrawInfo, mover: *const Mover, object_type: MoverType, is_colliding: bool) void {
-    const points = switch (object_type) {
+    const points: []Vector3 = switch (object_type) {
         MoverType.PlayerShip => SHIP_POINTS,
         MoverType.Asteroid => ASTEROID_POINTS,
         MoverType.Bullet => BULLET_POINTS,
@@ -1020,7 +1037,7 @@ fn transform_point_to_screen_space(point: Vector3, draw_info: *const DrawInfo) V
 
 fn transform_points_with_positions(draw_info: DrawInfo, points: []const Vector3) SdlPointsList {
     var sdl_points = SdlPointsList.init(std.heap.c_allocator);
-    sdl_points.resize(points.len) catch |err| std.debug.warn("Failed to resize sdl_points: {}", err);
+    sdl_points.resize(points.len) catch |err| std.debug.warn("Failed to resize sdl_points: {}", .{err});
 
     for (points) |point, i| {
         var p = transform_point_to_screen_space(point, &draw_info);
@@ -1032,7 +1049,7 @@ fn transform_points_with_positions(draw_info: DrawInfo, points: []const Vector3)
 
 fn transform_points_with_mover(draw_info: DrawInfo, points: []const Vector3, mover: *const Mover) SdlPointsList {
     var sdl_points = SdlPointsList.init(std.heap.c_allocator);
-    sdl_points.resize(points.len) catch |err| std.debug.warn("Failed to resize sdl_points: {}", err);
+    sdl_points.resize(points.len) catch |err| std.debug.warn("Failed to resize sdl_points: {}", .{err});
 
     for (points) |point, i| {
         var p = point.scale(mover.scale);

@@ -115,7 +115,7 @@ pub const Vector3 = struct {
     }
 
     pub fn log(v: Vector3) void {
-        std.debug.warn("Vector3: {:.2} {:.2} {:.2}\n", v.x, v.y, v.z);
+        std.debug.warn("Vector3: {d:.2} {d:.2} {d:.2}\n", .{ v.x, v.y, v.z });
     }
 };
 
