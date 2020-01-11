@@ -1,5 +1,6 @@
 const std = @import("std");
 const math = @import("math.zig");
+const slotmap = @import("lib/zig-slotmap/slotmap.zig");
 
 const Vector2 = math.Vector2;
 const Vector3 = math.Vector3;
@@ -101,8 +102,8 @@ fn MakeSystem(comptime ComponentType: type) type {
             component: ComponentType,
             entity: EntityId,
         };
-        const ECListType = std.ArrayList(EC);
-        const EntityMapType = std.AutoHashMap(EntityId, usize);
+        const ECListType = slotmap.Slotmap(EC);
+        const EntityMapType = std.AutoHashMap(EntityId, slotmap.Slot);
 
         components: ECListType,
         entity_lookup: EntityMapType,
@@ -124,22 +125,23 @@ fn MakeSystem(comptime ComponentType: type) type {
                 .component = component,
                 .entity = entity,
             };
-            try system.entity_lookup.putNoClobber(entity, system.components.len);
-            try system.components.append(ec);
+            var slot = try system.components.insert(ec);
+            try system.entity_lookup.putNoClobber(entity, slot);
         }
 
         pub fn remove(system: *Self, entity: EntityId) !void {
             var removed = system.entity_lookup.remove(entity) orelse return error.NOT_FOUND;
-            _ = try system.components.swapRemoveOrError(removed.value);
+            _ = try system.components.remove(removed.value);
         }
 
-        pub fn remove_safe(system: *Self, entity: EntityId) void {
+        pub fn removeSafe(system: *Self, entity: EntityId) void {
             system.remove(entity) catch {};
         }
 
         pub fn get(system: *Self, entity: EntityId) !*ComponentType {
             var index = system.entity_lookup.getValue(entity) orelse return error.NOT_FOUND;
-            return &system.components.ptrAt(index).component;
+            var ec = try system.components.getPtr(index);
+            return &ec.component;
         }
 
         pub fn toSlice(system: *Self) []EC {
@@ -413,10 +415,10 @@ fn pump_entity_queues(state: *GameState) !void {
         defer log_scope_time_on_overage("\tdelayed delete", start_time, 12.0);
 
         for (state.delete_list.toSlice()) |entity| {
-            state.movers.remove_safe(entity);
-            state.mover_types.remove_safe(entity);
-            state.asteroids.remove_safe(entity);
-            state.fighters.remove_safe(entity);
+            state.movers.removeSafe(entity);
+            state.mover_types.removeSafe(entity);
+            state.asteroids.removeSafe(entity);
+            state.fighters.removeSafe(entity);
         }
         try state.delete_list.resize(0);
     }
