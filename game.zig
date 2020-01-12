@@ -102,15 +102,15 @@ fn MakeSystem(comptime ComponentType: type) type {
             component: ComponentType,
             entity: EntityId,
         };
-        const ECListType = slotmap.Slotmap(EC);
-        const EntityMapType = std.AutoHashMap(EntityId, slotmap.Slot);
+        const ECSlotmap = slotmap.Dense(EC);
+        const EntityMapType = std.AutoHashMap(EntityId, ECSlotmap.Slot);
 
-        components: ECListType,
+        components: ECSlotmap,
         entity_lookup: EntityMapType,
 
         pub fn init(allocator: *std.mem.Allocator) Self {
             return Self{
-                .components = ECListType.init(allocator),
+                .components = ECSlotmap.init(allocator),
                 .entity_lookup = EntityMapType.init(allocator),
             };
         }
@@ -590,7 +590,6 @@ fn game_tick(state: *GameState, time: Time) !void {
             const MAX_ACCELERATION = 0.5 * time.dt;
             const MAX_SPEED = 0.7;
 
-            std.debug.warn("moving??\n", .{});
             player_mover.velocity = calc_velocity(player_mover.rot, player_mover.velocity, MAX_ACCELERATION, MAX_SPEED);
         }
 
@@ -606,8 +605,8 @@ fn game_tick(state: *GameState, time: Time) !void {
     {
         var player_mover: *Mover = try state.movers.get(state.player_entity_id);
 
-        // const start_time = get_time(time);
-        // defer log_scope_time_on_overage("\tenemy_logic", start_time, 12.0);
+        const start_time = get_time(time);
+        defer log_scope_time_on_overage("\tenemy_logic", start_time, 12.0);
 
         // spawn new enemies
         const ENEMY_SPAWN_COOLDOWN = 10.0;
@@ -631,97 +630,91 @@ fn game_tick(state: *GameState, time: Time) !void {
 
         // AI tick for existing enemies
         for (state.fighters.toSlice()) |*ec| {
-            // var fighter = &ec.component;
+            var fighter = &ec.component;
 
-            // const MAX_TURN_SPEED = 5.0 * time.dt;
-            // const MAX_SHOOT_RANGE = 200.0;
-            // const MAX_ACCELERATION = 0.12 * time.dt;
-            // const MAX_SPEED = 0.3;
-            // const MAX_TURN_SPEED = 9.0 * time.dt;
-            // const MAX_SHOOT_RANGE = 200.0;
-            // const MAX_ACCELERATION = 0.42 * time.dt;
-            // const MAX_SPEED = 0.7;
+            const MAX_TURN_SPEED = 5.0 * time.dt;
+            const MAX_SHOOT_RANGE = 200.0;
+            const MAX_ACCELERATION = 0.12 * time.dt;
+            const MAX_SPEED = 0.3;
 
-            // var mover = try state.movers.get(ec.entity);
+            var mover = try state.movers.get(ec.entity);
 
-            // // std.debug.warn("fighter mover: {d}\n", mover);
+            const to_player_mover = player_mover.pos.sub(mover.pos);
+            const to_player_length = to_player_mover.length();
+            const to_player_mover_dir = to_player_mover.scale(1.0 / to_player_length);
 
-            // const to_player_mover = player_mover.pos.sub(mover.pos);
-            // const to_player_length = to_player_mover.length();
-            // const to_player_mover_dir = to_player_mover.scale(1.0 / to_player_length);
+            switch (fighter.*) {
+                Fighter.Moving => |*move_state| {
+                    // turn towards the player and accelerate toward them
+                    const goal_rot = calc_goal_rot(to_player_mover_dir);
+                    const rot_delta = calc_rot_delta(goal_rot, mover.rot, MAX_TURN_SPEED);
+                    mover.rot += rot_delta;
 
-            // switch (fighter.*) {
-            //     Fighter.Moving => |*move_state| {
-            //         // turn towards the player and accelerate toward them
-            //         // const goal_rot = calc_goal_rot(to_player_mover_dir);
-            //         // const rot_delta = calc_rot_delta(goal_rot, mover.rot, MAX_TURN_SPEED);
-            //         // // mover.rot += rot_delta;
+                    mover.velocity = calc_velocity(mover.rot, mover.velocity, MAX_ACCELERATION, MAX_SPEED);
 
-            //         // // mover.velocity = calc_velocity(mover.rot, mover.velocity, MAX_ACCELERATION, MAX_SPEED);
+                    // get a bit within max shooting range so we don't immediately switch out
+                    if (to_player_length < MAX_SHOOT_RANGE * 0.9) {
+                        fighter.* = Fighter{
+                            .Shooting = FighterStateShoot{
+                                .last_shoot_time = 0,
+                            },
+                        };
+                    }
 
-            //         // // get a bit within max shooting range so we don't immediately switch out
-            //         // if (to_player_length < MAX_SHOOT_RANGE * 0.9) {
-            //         //     fighter.* = Fighter{
-            //         //         .Shooting = FighterStateShoot{
-            //         //             .last_shoot_time = 0,
-            //         //         },
-            //         //     };
-            //         // }
+                    // debug draw target
+                    // {
+                    //     const transformed1 = [_]sdl.SDL_Point{
+                    //         vector3_to_sdl(transform_point_to_screen_space(mover.pos, &draw_info)),
+                    //         vector3_to_sdl(transform_point_to_screen_space(mover.pos.add(to_player_mover), &draw_info)),
+                    //     };
 
-            //         // debug draw target
-            //         // {
-            //         //     const transformed1 = [_]sdl.SDL_Point{
-            //         //         vector3_to_sdl(transform_point_to_screen_space(mover.pos, &draw_info)),
-            //         //         vector3_to_sdl(transform_point_to_screen_space(mover.pos.add(to_player_mover), &draw_info)),
-            //         //     };
+                    //     draw_line_strip(draw_info, COLOR_WHITE, transformed1);
+                    // }
+                },
+                Fighter.Shooting => |*shoot_state| {
+                    // turn towards player
+                    const goal_rot = calc_goal_rot(to_player_mover_dir);
+                    const rot_delta = calc_rot_delta(goal_rot, mover.rot, MAX_TURN_SPEED);
+                    mover.rot += rot_delta;
 
-            //         //     draw_line_strip(draw_info, COLOR_WHITE, transformed1);
-            //         // }
-            //     },
-            //     Fighter.Shooting => |*shoot_state| {
-            //         // // turn towards player
-            //         // const goal_rot = calc_goal_rot(to_player_mover_dir);
-            //         // const rot_delta = calc_rot_delta(goal_rot, mover.rot, MAX_TURN_SPEED);
-            //         // // mover.rot += rot_delta;
+                    const SHOOT_COOLDOWN = 1.0;
+                    const is_aiming_at_player = std.math.fabs(rot_delta) <= MAX_TURN_SPEED;
+                    const is_cooldown_finished = SHOOT_COOLDOWN <= time.total_elapsed - shoot_state.last_shoot_time;
 
-            //         // const SHOOT_COOLDOWN = 1.0;
-            //         // const is_aiming_at_player = std.math.fabs(rot_delta) <= MAX_TURN_SPEED;
-            //         // const is_cooldown_finished = SHOOT_COOLDOWN <= time.total_elapsed - shoot_state.last_shoot_time;
+                    if (is_cooldown_finished and is_aiming_at_player) {
+                        shoot_state.last_shoot_time = time.total_elapsed;
+                        const shoot_direction = forward.rotateZ(mover.rot);
+                        try shoot_bullet(state, mover, shoot_direction);
+                    }
 
-            //         // if (is_cooldown_finished and is_aiming_at_player) {
-            //         //     shoot_state.last_shoot_time = time.total_elapsed;
-            //         //     const shoot_direction = forward.rotateZ(mover.rot);
-            //         //     // try shoot_bullet(state, mover, shoot_direction);
-            //         // }
+                    if (to_player_length > MAX_SHOOT_RANGE) {
+                        fighter.* = Fighter{
+                            .Moving = FighterStateMove{},
+                        };
+                    }
 
-            //         // if (to_player_length > MAX_SHOOT_RANGE) {
-            //         //     fighter.* = Fighter{
-            //         //         .Moving = FighterStateMove{},
-            //         //     };
-            //         // }
+                    // debug draw target
+                    // {
+                    //     const target1 = to_player_mover;
+                    //     const transformed1 = [_]sdl.SDL_Point{
+                    //         vector3_to_sdl(transform_point_to_screen_space(mover.pos, &draw_info)),
+                    //         vector3_to_sdl(transform_point_to_screen_space(mover.pos.add(target1), &draw_info)),
+                    //     };
 
-            //         // debug draw target
-            //         // {
-            //         //     const target1 = to_player_mover;
-            //         //     const transformed1 = [_]sdl.SDL_Point{
-            //         //         vector3_to_sdl(transform_point_to_screen_space(mover.pos, &draw_info)),
-            //         //         vector3_to_sdl(transform_point_to_screen_space(mover.pos.add(target1), &draw_info)),
-            //         //     };
+                    //     const target2 = forward.rotateZ(mover.rot).scale(200);
+                    //     const transformed2 = [_]sdl.SDL_Point{
+                    //         vector3_to_sdl(transform_point_to_screen_space(mover.pos, &draw_info)),
+                    //         vector3_to_sdl(transform_point_to_screen_space(mover.pos.add(target2), &draw_info)),
+                    //     };
 
-            //         //     const target2 = forward.rotateZ(mover.rot).scale(200);
-            //         //     const transformed2 = [_]sdl.SDL_Point{
-            //         //         vector3_to_sdl(transform_point_to_screen_space(mover.pos, &draw_info)),
-            //         //         vector3_to_sdl(transform_point_to_screen_space(mover.pos.add(target2), &draw_info)),
-            //         //     };
-
-            //         //     // const transformed = transform_points_with_mover(draw_info, points, mover);
-            //         //     // draw_line_strip(draw_info, COLOR_WHITE, transformed.toSliceConst());
-            //         //     draw_line_strip(draw_info, COLOR_WHITE, transformed1);
-            //         //     draw_line_strip(draw_info, COLOR_GREEN, transformed2);
-            //         // }
-            //     },
-            //     else => {},
-            // }
+                    //     // const transformed = transform_points_with_mover(draw_info, points, mover);
+                    //     // draw_line_strip(draw_info, COLOR_WHITE, transformed.toSliceConst());
+                    //     draw_line_strip(draw_info, COLOR_WHITE, transformed1);
+                    //     draw_line_strip(draw_info, COLOR_GREEN, transformed2);
+                    // }
+                },
+                else => {},
+            }
         }
     }
 
