@@ -88,11 +88,11 @@ const EntityId = struct {
 };
 
 const NewEntityDesc = struct {
-    id: EntityId,
+    id: EntityId = ENTITY_ID_INVALID,
     mover_type: MoverType,
     mover: Mover,
-    optional_asteroid: ?Asteroid,
-    optional_fighter: ?Fighter,
+    asteroid: ?Asteroid = null,
+    fighter: ?Fighter = null,
 };
 
 fn MakeSystem(comptime ComponentType: type) type {
@@ -279,11 +279,6 @@ pub fn main() !u8 {
         .input = InputState{},
         .stars = PositionList.init(std.heap.c_allocator),
 
-        // .mover_types = MoverTypeList.init(std.heap.c_allocator),
-        // .movers = MoverList.init(std.heap.c_allocator),
-        // .asteroids = AsteroidList.init(std.heap.c_allocator),
-        // .fighters = FighterList.init(std.heap.c_allocator),
-
         .entities = EntityList.init(std.heap.c_allocator),
         .mover_types = MoverTypeSystem.init(std.heap.c_allocator),
         .movers = MoverSystem.init(std.heap.c_allocator),
@@ -316,7 +311,12 @@ pub fn main() !u8 {
             .scale = 10,
         };
 
-        gamestate.player_entity_id = try new_entity_delayed(&gamestate, MoverType.PlayerShip, &mover, null, null);
+        const desc = NewEntityDesc{
+            .mover = mover,
+            .mover_type = MoverType.PlayerShip,
+        };
+
+        gamestate.player_entity_id = try new_entity_delayed(&gamestate, desc);
     }
 
     // asteroids
@@ -344,7 +344,13 @@ pub fn main() !u8 {
                 .velocity = (Vector3{ .x = xdir, .y = ydir }).normalize().scale(speed),
             };
 
-            _ = try new_entity_delayed(&gamestate, MoverType.Asteroid, &mover, &asteroid, null);
+            const desc = NewEntityDesc{
+                .mover = mover,
+                .mover_type = MoverType.Asteroid,
+                .asteroid = asteroid,
+            };
+
+            _ = try new_entity_delayed(&gamestate, desc);
         }
     }
 
@@ -390,21 +396,16 @@ pub fn main() !u8 {
     return 0;
 }
 
-fn new_entity_delayed(state: *GameState, mover_type: MoverType, mover: *const Mover, optional_asteroid: ?*const Asteroid, optional_fighter: ?*const Fighter) !EntityId {
+fn new_entity_delayed(state: *GameState, desc: NewEntityDesc) !EntityId {
     state.next_entity_id = state.next_entity_id + 1;
     const id = EntityId{
         .id = state.next_entity_id,
     };
 
-    var desc = NewEntityDesc{
-        .id = id,
-        .mover_type = mover_type,
-        .mover = mover.*,
-        .optional_asteroid = if (optional_asteroid) |asteroid| asteroid.* else null,
-        .optional_fighter = if (optional_fighter) |fighter| fighter.* else null,
-    };
+    var desc_with_id = desc;
+    desc_with_id.id = id;
 
-    try state.new_entities.append(desc);
+    try state.new_entities.append(desc_with_id);
 
     return id;
 }
@@ -436,8 +437,8 @@ fn pump_entity_queues(state: *GameState) !void {
             desc.mover.velocity.y,
         });
 
-        if (desc.optional_asteroid) |asteroid| try state.asteroids.add(asteroid, desc.id);
-        if (desc.optional_fighter) |fighter| try state.fighters.add(fighter, desc.id);
+        if (desc.asteroid) |asteroid| try state.asteroids.add(asteroid, desc.id);
+        if (desc.fighter) |fighter| try state.fighters.add(fighter, desc.id);
     }
     try state.new_entities.resize(0);
 }
@@ -456,7 +457,12 @@ fn shoot_bullet(state: *GameState, from_mover: *const Mover, direction: Vector3)
         .scale = BULLET_SIZE,
     };
 
-    _ = try new_entity_delayed(state, MoverType.Bullet, &mover, null, null);
+    const desc = NewEntityDesc{
+        .mover = mover,
+        .mover_type = MoverType.Bullet,
+    };
+
+    _ = try new_entity_delayed(state, desc);
 }
 
 fn log_sdl_error() void {
@@ -625,7 +631,13 @@ fn game_tick(state: *GameState, time: Time) !void {
                 .Shooting = FighterStateShoot{},
             };
 
-            _ = try new_entity_delayed(state, MoverType.Fighter, &mover, null, &fighter);
+            const desc = NewEntityDesc{
+                .mover = mover,
+                .mover_type = MoverType.Fighter,
+                .fighter = fighter,
+            };
+
+            _ = try new_entity_delayed(state, desc);
         }
 
         // AI tick for existing enemies
@@ -819,7 +831,13 @@ fn game_tick(state: *GameState, time: Time) !void {
                         mover.pos = mover.pos.add(mover.velocity.scale(100.0));
                         mover_clone.pos = mover_clone.pos.add(mover_clone.velocity.scale(100.0));
 
-                        _ = try new_entity_delayed(state, MoverType.Asteroid, &mover_clone, asteroid, null);
+                        const desc = NewEntityDesc{
+                            .mover = mover_clone,
+                            .mover_type = MoverType.Asteroid,
+                            .asteroid = asteroid.*,
+                        };
+
+                        _ = try new_entity_delayed(state, desc);
                     }
                 }
             }
