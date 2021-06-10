@@ -1,9 +1,9 @@
 Engine:
-* Use hashmaps of entity id to components? or maybe a flat array of all components with a quick hashmap reverse-lookup index?
+* TODO atan2 - y then x
 
 Weapons:
-* 
-
+* homing missle
+* text
 
 Infinite world:
 * assign sector (x,y) to mover

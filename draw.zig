@@ -1,19 +1,20 @@
 const std = @import("std");
 const math = @import("math.zig");
+const sdl = @import("sdl2.zig");
+const game = @import("game.zig");
 
 const Vector2 = math.Vector2;
 const Vector3 = math.Vector3;
 const Vector4 = math.Vector4;
 const Mat4x4 = math.Mat4x4;
 
-const sdl = @cImport({
-    @cInclude("SDL2/SDL.h");
-});
+const Mover = game.Mover;
+const MoverType = game.MoverType;
 
 // =======================================================
 // helpers
 
-const SHIP_POINTS = &[_]Vector3{
+const SHIP_POINTS = [_]Vector3{
     Vector3{ .x = 1, .y = 0.0, .z = 0.0 },
     Vector3{ .x = -0.7, .y = -1, .z = 0.0 },
     Vector3{ .x = 0.0, .y = 0.0, .z = 0.0 },
@@ -21,7 +22,7 @@ const SHIP_POINTS = &[_]Vector3{
     Vector3{ .x = 1, .y = 0.0, .z = 0.0 },
 };
 
-const ASTEROID_POINTS = &[_]Vector3{
+const ASTEROID_POINTS = [_]Vector3{
     Vector3{ .x = 0.0, .y = 0.8, .z = 0.0 },
     Vector3{ .x = 0.8, .y = 0.4, .z = 0.0 },
     Vector3{ .x = 0.6, .y = -0.2, .z = 0.0 },
@@ -33,7 +34,7 @@ const ASTEROID_POINTS = &[_]Vector3{
     Vector3{ .x = 0.0, .y = 0.8, .z = 0.0 },
 };
 
-const BULLET_POINTS = &[_]Vector3{
+const BULLET_POINTS = [_]Vector3{
     Vector3{ .x = 1.0, .y = -1.0 },
     Vector3{ .x = 1.0, .y = 1.0 },
     Vector3{ .x = -1.0, .y = 1.0 },
@@ -66,12 +67,18 @@ fn generate_circle() []Vector3 {
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 // public interface
 
-pub const MoverType = enum {
-    PlayerShip,
-    Asteroid,
-    Bullet,
-    Fighter,
+pub const Color = struct {
+    r: u8 = 0,
+    g: u8 = 0,
+    b: u8 = 0,
+    a: u8 = 0,
 };
+
+pub const COLOR_WHITE = Color{ .r = 255, .g = 255, .b = 255, .a = 255 };
+pub const COLOR_GRAY = Color{ .r = 128, .g = 128, .b = 128, .a = 255 };
+pub const COLOR_RED = Color{ .r = 255, .a = 255 };
+pub const COLOR_GREEN = Color{ .g = 255, .a = 255 };
+pub const COLOR_BLUE = Color{ .b = 255, .a = 255 };
 
 pub const Camera = struct {
     pos: Vector3 = Vector3{},
@@ -86,23 +93,23 @@ pub const DrawInfo = struct {
 
 pub fn draw_points(draw_info: DrawInfo, color: Color, points: []const sdl.SDL_Point) void {
     if (sdl.SDL_SetRenderDrawColor(draw_info.renderer, color.r, color.g, color.b, color.a) < 0) {
-        log_sdl_error();
+        sdl.log_sdl_error();
     }
 
     var cPoints: [*c]const sdl.SDL_Point = &points[0];
     if (sdl.SDL_RenderDrawPoints(draw_info.renderer, cPoints, @intCast(c_int, points.len)) < 0) {
-        log_sdl_error();
+        sdl.log_sdl_error();
     }
 }
 
 pub fn draw_line_strip(draw_info: DrawInfo, color: Color, points: []const sdl.SDL_Point) void {
     if (sdl.SDL_SetRenderDrawColor(draw_info.renderer, color.r, color.g, color.b, color.a) < 0) {
-        log_sdl_error();
+        sdl.log_sdl_error();
     }
 
     var cPoints: [*c]const sdl.SDL_Point = &points[0];
     if (sdl.SDL_RenderDrawLines(draw_info.renderer, cPoints, @intCast(c_int, points.len)) < 0) {
-        log_sdl_error();
+        sdl.log_sdl_error();
     }
 }
 
@@ -110,16 +117,16 @@ pub fn draw_bounding_circle(draw_info: DrawInfo, mover: *const Mover, is_collidi
     const color = if (is_colliding) COLOR_RED else COLOR_GRAY;
     const sdl_points = transform_points_with_mover(draw_info, CIRCLE_POINTS, mover);
 
-    draw_line_strip(draw_info, color, sdl_points.toSliceConst());
+    draw_line_strip(draw_info, color, sdl_points.items);
     sdl_points.deinit();
 }
 
 pub fn draw_object(draw_info: DrawInfo, mover: *const Mover, object_type: MoverType, is_colliding: bool) void {
-    const points: []Vector3 = switch (object_type) {
-        MoverType.PlayerShip => SHIP_POINTS,
-        MoverType.Asteroid => ASTEROID_POINTS,
-        MoverType.Bullet => BULLET_POINTS,
-        MoverType.Fighter => SHIP_POINTS,
+    const points = switch (object_type) {
+        MoverType.PlayerShip => SHIP_POINTS[0..],
+        MoverType.Asteroid => ASTEROID_POINTS[0..],
+        MoverType.Bullet => BULLET_POINTS[0..],
+        MoverType.Fighter => SHIP_POINTS[0..],
     };
     const color = switch (object_type) {
         MoverType.PlayerShip => COLOR_GRAY,
@@ -130,7 +137,7 @@ pub fn draw_object(draw_info: DrawInfo, mover: *const Mover, object_type: MoverT
 
     var sdl_points = transform_points_with_mover(draw_info, points, mover);
 
-    draw_line_strip(draw_info, color, sdl_points.toSliceConst());
+    draw_line_strip(draw_info, color, sdl_points.items);
     sdl_points.deinit();
 
     // draw_bounding_circle(draw_info, mover, is_colliding);
@@ -155,14 +162,14 @@ pub fn draw_object(draw_info: DrawInfo, mover: *const Mover, object_type: MoverT
     //     };
 
     //     sdl_points = transform_points_with_mover(draw_info, points, &mirror_mover);
-    //     draw_line_strip(draw_info, COLOR_BLUE, sdl_points.toSliceConst());
+    //     draw_line_strip(draw_info, COLOR_BLUE, sdl_points.items);
     //     draw_bounding_circle(draw_info, &mirror_mover, is_colliding);
     // }
 }
 
 pub fn draw_stars(draw_info: DrawInfo, points: []const Vector3) void {
     var sdl_points = transform_points_with_positions(draw_info, points);
-    draw_points(draw_info, COLOR_GRAY, sdl_points.toSliceConst());
+    draw_points(draw_info, COLOR_GRAY, sdl_points.items);
     sdl_points.deinit();
 }
 
@@ -176,7 +183,7 @@ pub fn transform_points_with_positions(draw_info: DrawInfo, points: []const Vect
 
     for (points) |point, i| {
         var p = transform_point_to_screen_space(point, &draw_info);
-        sdl_points.set(i, vector3_to_sdl(p));
+        sdl_points.items[i] = vector3_to_sdl(p);
     }
 
     return sdl_points;
@@ -191,7 +198,7 @@ pub fn transform_points_with_mover(draw_info: DrawInfo, points: []const Vector3,
         p = p.rotateZ(mover.rot);
         p = p.add(mover.pos);
         p = transform_point_to_screen_space(p, &draw_info);
-        sdl_points.set(i, vector3_to_sdl(p));
+        sdl_points.items[i] = vector3_to_sdl(p);
     }
 
     return sdl_points;
