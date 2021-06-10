@@ -2,29 +2,12 @@ const std = @import("std");
 const math = @import("math.zig");
 const slotmap = @import("lib/zig-slotmap/slotmap.zig");
 const draw = @import("draw.zig");
+const sdl = @import("sdl2.zig");
 
 const Vector2 = math.Vector2;
 const Vector3 = math.Vector3;
 const Vector4 = math.Vector4;
 const Mat4x4 = math.Mat4x4;
-const MoverType = draw.MoverType;
-
-const sdl = @cImport({
-    @cInclude("SDL2/SDL.h");
-});
-
-const Color = struct {
-    r: u8 = 0,
-    g: u8 = 0,
-    b: u8 = 0,
-    a: u8 = 0,
-};
-
-const COLOR_WHITE = Color{ .r = 255, .g = 255, .b = 255, .a = 255 };
-const COLOR_GRAY = Color{ .r = 128, .g = 128, .b = 128, .a = 255 };
-const COLOR_RED = Color{ .r = 255, .a = 255 };
-const COLOR_GREEN = Color{ .g = 255, .a = 255 };
-const COLOR_BLUE = Color{ .b = 255, .a = 255 };
 
 const Time = struct {
     total_elapsed: f64 = 0.0,
@@ -43,11 +26,18 @@ const Fixed = struct {
     pos: Vector3 = Vector3{},
 };
 
-const Mover = struct {
+pub const Mover = struct {
     velocity: Vector3 = Vector3{},
     pos: Vector3 = Vector3{},
     scale: f32 = 1,
     rot: f32 = 0,
+};
+
+pub const MoverType = enum {
+    PlayerShip,
+    Asteroid,
+    Bullet,
+    Fighter,
 };
 
 const Asteroid = struct {
@@ -121,7 +111,7 @@ fn MakeSystem(comptime ComponentType: type) type {
         }
 
         pub fn remove(system: *Self, entity: EntityId) !void {
-            var removed = system.entity_lookup.remove(entity) orelse return error.NOT_FOUND;
+            var removed = system.entity_lookup.fetchRemove(entity) orelse return error.NOT_FOUND;
             _ = try system.components.remove(removed.value);
         }
 
@@ -130,7 +120,7 @@ fn MakeSystem(comptime ComponentType: type) type {
         }
 
         pub fn get(system: *Self, entity: EntityId) !*ComponentType {
-            var index = system.entity_lookup.getValue(entity) orelse return error.NOT_FOUND;
+            var index = system.entity_lookup.get(entity) orelse return error.NOT_FOUND;
             var ec = try system.components.getPtr(index);
             return &ec.component;
         }
@@ -209,7 +199,7 @@ const COLLISION_MASKS = [_]u8{
 };
 
 comptime {
-    std.debug.assert(@memberCount(MoverType) == COLLISION_MASKS.len);
+    std.debug.assert(@typeInfo(MoverType).Enum.fields.len == COLLISION_MASKS.len);
 }
 
 const ASTEROID_SCALES = [_]f32{ 15.0, 20.0, 45.0, 100.0 };
@@ -227,7 +217,7 @@ fn get_window_size(window: *sdl.SDL_Window) Vector2 {
 
 pub fn main() !u8 {
     if (sdl.SDL_Init(sdl.SDL_INIT_VIDEO | sdl.SDL_INIT_AUDIO) != 0) {
-        std.debug.panic("sdl.SDL_Init failed: {c}\n", .{sdl.SDL_GetError()});
+        std.debug.panic("sdl.SDL_Init failed: {s}\n", .{sdl.SDL_GetError()});
     }
     defer sdl.SDL_Quit();
 
@@ -281,7 +271,7 @@ pub fn main() !u8 {
 
     // stars
     try gamestate.stars.resize(2000);
-    for (gamestate.stars.toSlice()) |*pos| {
+    for (gamestate.stars.items) |*pos| {
         const x = gamestate.rng.random.float(f32) * gamestate.world_bounds.x;
         const y = gamestate.rng.random.float(f32) * gamestate.world_bounds.y;
         pos.x = x;
@@ -399,7 +389,7 @@ fn pump_entity_queues(state: *GameState) !void {
         const start_time = get_time(null);
         defer log_scope_time_on_overage("\tdelayed delete", start_time, 12.0);
 
-        for (state.delete_list.toSlice()) |entity| {
+        for (state.delete_list.items) |entity| {
             state.movers.removeSafe(entity);
             state.mover_types.removeSafe(entity);
             state.asteroids.removeSafe(entity);
@@ -408,12 +398,12 @@ fn pump_entity_queues(state: *GameState) !void {
         try state.delete_list.resize(0);
     }
 
-    for (state.new_entities.toSliceConst()) |desc| {
+    for (state.new_entities.items) |desc| {
         try state.entities.append(desc.id);
         try state.mover_types.add(desc.mover_type, desc.id);
         try state.movers.add(desc.mover, desc.id);
 
-        std.debug.warn("[entity]\n\ttype: {}\n\tpos: {d:.2} {d:.2}\n\tvelocity: {d:.2} {d:.2}\n", .{
+        std.debug.warn("[entity]\n\ttype: {any}\n\tpos: {d:.2} {d:.2}\n\tvelocity: {d:.2} {d:.2}\n", .{
             @tagName(desc.mover_type),
             desc.mover.pos.x,
             desc.mover.pos.y,
@@ -449,12 +439,6 @@ fn shoot_bullet(state: *GameState, from_mover: *const Mover, direction: Vector3)
     _ = try new_entity_delayed(state, desc);
 }
 
-fn log_sdl_error() void {
-    var c_err = sdl.SDL_GetError() orelse return;
-    var err = std.mem.toSliceConst(u8, c_err);
-    std.debug.warn("Error in SDL: {}\n", .{err});
-}
-
 fn get_time(optional_prev: ?Time) Time {
     const prev = if (optional_prev) |time| time else Time{};
 
@@ -477,7 +461,7 @@ fn log_scope_time(name: []const u8, prev_time: Time) void {
 fn log_scope_time_on_overage(name: []const u8, prev_time: Time, overage_threshold_ms: f32) void {
     const now = get_time(prev_time);
     if (now.dt * 1000.0 > overage_threshold_ms) {
-        std.debug.warn("{}: {d:.2}ms\n", .{ name, now.dt * 1000.0 });
+        std.debug.warn("{any}: {d:.2}ms\n", .{ name, now.dt * 1000.0 });
     }
 }
 
@@ -492,16 +476,16 @@ fn game_tick(state: *GameState, time: Time) !void {
     };
 
     if (sdl.SDL_SetRenderDrawColor(state.renderer, 0, 0, 0, 255) < 0) {
-        log_sdl_error();
+        sdl.log_sdl_error();
     }
     if (sdl.SDL_RenderClear(state.renderer) < 0) {
-        log_sdl_error();
+        sdl.log_sdl_error();
     }
 
     // draw debug grid lines
     // if (false) {
     //     if (sdl.SDL_SetRenderDrawColor(state.renderer, 45, 45, 45, 255) < 0) {
-    //         log_sdl_error();
+    //         sdl.log_sdl_error();
     //     }
 
     //     const step: i32 = 10;
@@ -510,14 +494,14 @@ fn game_tick(state: *GameState, time: Time) !void {
     //     while (x < state.world_bounds.x) {
     //         x += step;
     //         if (sdl.SDL_RenderDrawLine(state.renderer, x, 0, x, state.world_bounds.y) < 0) {
-    //             log_sdl_error();
+    //             sdl.log_sdl_error();
     //         }
     //     }
 
     //     while (y < state.world_bounds.y) {
     //         y += step;
     //         if (sdl.SDL_RenderDrawLine(state.renderer, 0, y, state.world_bounds.x, y) < 0) {
-    //             log_sdl_error();
+    //             sdl.log_sdl_error();
     //         }
     //     }
     // }
@@ -525,7 +509,7 @@ fn game_tick(state: *GameState, time: Time) !void {
     {
         const start_time = get_time(time);
         defer log_scope_time_on_overage("\tdraw.draw_stars", start_time, 12.0);
-        draw.draw_stars(draw_info, state.stars.toSliceConst());
+        draw.draw_stars(draw_info, state.stars.items);
     }
 
     // draw world border
@@ -547,8 +531,8 @@ fn game_tick(state: *GameState, time: Time) !void {
             Vector3{ .x = 0, .y = 0 },
         };
 
-        var points = transform_points_with_positions(draw_info, border_points);
-        draw.draw_line_strip(draw_info, COLOR_GREEN, points.toSlice());
+        var points = draw.transform_points_with_positions(draw_info, border_points);
+        draw.draw_line_strip(draw_info, draw.COLOR_GREEN, points.items);
         points.deinit();
     }
 
@@ -704,7 +688,7 @@ fn game_tick(state: *GameState, time: Time) !void {
                     //     };
 
                     //     // const transformed = transform_points_with_mover(draw_info, points, mover);
-                    //     // draw_line_strip(draw_info, COLOR_WHITE, transformed.toSliceConst());
+                    //     // draw_line_strip(draw_info, COLOR_WHITE, transformed.items);
                     //     draw_line_strip(draw_info, COLOR_WHITE, transformed1);
                     //     draw_line_strip(draw_info, COLOR_GREEN, transformed2);
                     // }
@@ -749,11 +733,11 @@ fn game_tick(state: *GameState, time: Time) !void {
                     var is_colliding = distanceSq <= collisionLength * collisionLength;
 
                     if (collision_mask1 & collision_bit2 != 0) {
-                        colliding_state.set(i, colliding_state.at(i) or is_colliding);
+                        colliding_state.items[i] = colliding_state.items[i] or is_colliding;
                     }
 
                     if (collision_mask2 & collision_bit1 != 0) {
-                        colliding_state.set(k, colliding_state.at(k) or is_colliding);
+                        colliding_state.items[k] = colliding_state.items[k] or is_colliding;
                     }
                 }
             }
@@ -770,7 +754,7 @@ fn game_tick(state: *GameState, time: Time) !void {
                 mover.pos.y = @mod(mover.pos.y + state.world_bounds.y, state.world_bounds.y);
 
                 const mover_type = (try state.mover_types.get(ec.entity)).*;
-                const is_colliding = colliding_state.at(index);
+                const is_colliding = colliding_state.items[index];
 
                 {
                     const start_time2 = get_time(time);
