@@ -2,7 +2,7 @@ Engine:
 * TODO atan2 - y then x
 
 Weapons:
-* homing missle
+* homing missile
 * text
 
 Infinite world:
