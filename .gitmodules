@@ -1,3 +1,6 @@
 [submodule "lib/zig-slotmap"]
 	path = lib/zig-slotmap
 	url = https://github.com/rdunnington/zig-slotmap.git
+[submodule "lib/zig-bmfont"]
+	path = lib/zig-bmfont
+	url = https://github.com/rdunnington/zig-bmfont.git
