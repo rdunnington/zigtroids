@@ -1,5 +1,4 @@
 pub usingnamespace @cImport({
-    // @cInclude("lib/SDL2-2.0.14/include/SDL.h");
     @cInclude("SDL.h");
 });
 

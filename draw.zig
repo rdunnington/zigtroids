@@ -2,6 +2,7 @@ const std = @import("std");
 const math = @import("math.zig");
 const sdl = @import("sdl2.zig");
 const game = @import("game.zig");
+const font = @import("font.zig");
 
 const Vector2 = math.Vector2;
 const Vector3 = math.Vector3;
@@ -91,6 +92,15 @@ pub const DrawInfo = struct {
     world_bounds: Vector2,
 };
 
+pub const DrawTextScreenspaceParams = struct {
+    x: i32,
+    y: i32,
+    pixel_height: u32,
+    text: []const u8,
+    renderer: *sdl.SDL_Renderer,
+    font: *const font.Font,
+};
+
 pub fn draw_points(draw_info: DrawInfo, color: Color, points: []const sdl.SDL_Point) void {
     if (sdl.SDL_SetRenderDrawColor(draw_info.renderer, color.r, color.g, color.b, color.a) < 0) {
         sdl.log_sdl_error();
@@ -173,10 +183,54 @@ pub fn draw_stars(draw_info: DrawInfo, points: []const Vector3) void {
     sdl_points.deinit();
 }
 
+pub fn draw_text_screenspace(params: DrawTextScreenspaceParams) void {
+    const scale: f32 = @intToFloat(f32, params.pixel_height) / @intToFloat(f32, params.font.font.common.line_height);
+    // TODO if pixel_height is 0, default to the common line height
+
+    var x: c_int = params.x;
+    var y: c_int = params.y;
+
+    for (params.text) |char, i| {
+        if (char == '\r' or char == '\n') {
+            if (i + 1 < params.text.len and params.text[i + 1] == '\n') {
+                continue;
+            }
+            x = params.x;
+            y += @intCast(c_int, params.pixel_height);
+        }
+
+        const char_info_or_null = params.font.char_lookup.getPtr(char);
+        if (char_info_or_null == null) {
+            std.debug.warn("Failed to lookup text char {}. The font wasn't baked with the info for that character.", .{char});
+            continue;
+        }
+        const char_info = char_info_or_null.?;
+
+        const texture = params.font.textures[char_info.texture_index];
+        const rect_source = char_info.rect;
+        const width: c_int = @floatToInt(c_int, scale * @intToFloat(f32, char_info.rect.w));
+        const rect_dest = sdl.SDL_Rect{
+            .x = x,
+            .y = y,
+            .w = width,
+            .h = @intCast(c_int, params.pixel_height),
+        };
+
+        if (sdl.SDL_RenderCopy(params.renderer, texture, &rect_source, &rect_dest) < 0) {
+            sdl.log_sdl_error();
+            return;
+        }
+
+        x += params.font.font.chars[char_info.char_index].xadvance;
+        // TODO kerning
+    }
+}
+
 pub fn transform_point_to_screen_space(point: Vector3, draw_info: *const DrawInfo) Vector3 {
     return point.sub(draw_info.camera.pos).add(draw_info.viewport_offset);
 }
 
+// TODO pass in allocator
 pub fn transform_points_with_positions(draw_info: DrawInfo, points: []const Vector3) SdlPointsList {
     var sdl_points = SdlPointsList.init(std.heap.c_allocator);
     sdl_points.resize(points.len) catch |err| std.debug.warn("Failed to resize sdl_points: {}", .{err});
@@ -189,6 +243,7 @@ pub fn transform_points_with_positions(draw_info: DrawInfo, points: []const Vect
     return sdl_points;
 }
 
+// TODO pass in allocator
 pub fn transform_points_with_mover(draw_info: DrawInfo, points: []const Vector3, mover: *const Mover) SdlPointsList {
     var sdl_points = SdlPointsList.init(std.heap.c_allocator);
     sdl_points.resize(points.len) catch |err| std.debug.warn("Failed to resize sdl_points: {}", .{err});

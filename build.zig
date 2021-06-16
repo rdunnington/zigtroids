@@ -13,6 +13,10 @@ pub fn build(b: *std.build.Builder) void {
     exe.addLibPath(sdl_path ++ "lib\\x64");
     b.installBinFile(sdl_path ++ "lib\\x64\\SDL2.dll", "SDL2.dll");
     exe.linkSystemLibrary("sdl2");
+
+    exe.addIncludeDir("lib\\stb");
+    exe.addIncludeDir("lib\\lodepng");
+
     exe.linkLibC();
     exe.install();
 

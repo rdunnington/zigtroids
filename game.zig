@@ -1,13 +1,19 @@
 const std = @import("std");
 const math = @import("math.zig");
-const slotmap = @import("lib/zig-slotmap/slotmap.zig");
 const draw = @import("draw.zig");
+const font = @import("font.zig");
 const sdl = @import("sdl2.zig");
+
+const slotmap = @import("lib/zig-slotmap/slotmap.zig");
 
 const Vector2 = math.Vector2;
 const Vector3 = math.Vector3;
 const Vector4 = math.Vector4;
 const Mat4x4 = math.Mat4x4;
+
+const FontStyle = enum {
+    Monospace,
+};
 
 const Time = struct {
     total_elapsed: f64 = 0.0,
@@ -157,6 +163,8 @@ const GameState = struct {
     previous_time: Time,
     rng: std.rand.DefaultPrng,
 
+    fonts: std.AutoHashMap(FontStyle, font.Font),
+
     camera: draw.Camera,
     world_bounds: Vector2,
 
@@ -248,6 +256,7 @@ pub fn main() !u8 {
             .dt = 0,
         }),
         .rng = std.rand.DefaultPrng.init(0),
+        .fonts = std.AutoHashMap(FontStyle, font.Font).init(std.heap.c_allocator),
         .camera = draw.Camera{},
         .world_bounds = world_bounds,
         .input = InputState{},
@@ -268,6 +277,20 @@ pub fn main() !u8 {
 
         .debug_camera = false,
     };
+
+    // fonts
+    inline for (@typeInfo(FontStyle).Enum.fields) |field| {
+        const value = @intToEnum(FontStyle, field.value);
+        const path: []const u8 = switch (value) {
+            // .Monospace => "data/fonts/Consolas.fnt",
+            .Monospace => "D:\\Dev\\zig_projects\\asteroid\\data\\fonts\\Consolas.fnt",
+        };
+        if (font.loadFont(path, std.heap.c_allocator, renderer)) |fontInfo| {
+            try gamestate.fonts.putNoClobber(value, fontInfo);
+        } else |err| {
+            std.debug.warn("Failed to load font '{s}'. Error: {}", .{ path, err });
+        }
+    }
 
     // stars
     try gamestate.stars.resize(2000);
@@ -811,6 +834,27 @@ fn game_tick(state: *GameState, time: Time) !void {
             }
         }
         colliding_state.deinit();
+    }
+
+    {
+        var params = draw.DrawTextScreenspaceParams{
+            .x = 0,
+            .y = 0,
+            .pixel_height = 32,
+            .text = "hello world~",
+            .renderer = state.renderer,
+            .font = state.fonts.getPtr(FontStyle.Monospace).?,
+        };
+        draw.draw_text_screenspace(params);
+        // pub fn draw_text_screenspace(params: DrawTextScreenspaceParams) void {
+        // pub const DrawTextScreenspaceParams = struct {
+        //     renderer: *sdl.SDL_Renderer,
+        //     font: Font,
+        //     text: const []u8,
+        //     x: i32,
+        //     y: i32,
+        //     pixel_height: u32,
+        // };
     }
 
     {
